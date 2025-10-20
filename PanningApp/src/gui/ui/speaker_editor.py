@@ -36,6 +36,7 @@ class SpeakerEditor(Frame):
         apply_callback: Callable[[List[np.ndarray]], None],
         default_distances: Tuple[float, float, float],
     ):
+        """Build the editor controls used to configure loudspeaker positions."""
         super().__init__(master)
         self.layout = layout
         self.default_x, self.default_y, self.default_z = default_distances
@@ -61,6 +62,7 @@ class SpeakerEditor(Frame):
 
     # ------------------------------------------------------------------
     def _apply_count(self):
+        """Handle changes to requested loudspeaker count and rebuild UI rows."""
         try:
             count = int(self.count_var.get())
         except ValueError:
@@ -73,6 +75,7 @@ class SpeakerEditor(Frame):
         self._apply_positions()
 
     def _apply_positions(self):
+        """Validate distances/directions and push updated positions to the app."""
         vectors: List[np.ndarray] = []
         for idx, entry in enumerate(self.entries):
             try:
@@ -101,6 +104,7 @@ class SpeakerEditor(Frame):
         self.apply_callback(self.layout.positions)
 
     def _rebuild_rows(self, count: int):
+        """Recreate editable speaker rows so the UI matches the desired count."""
         for widget in self.entries_frame.winfo_children():
             widget.destroy()
         self.entries.clear()
@@ -131,6 +135,7 @@ class SpeakerEditor(Frame):
         direction: str,
         options: Iterable[str],
     ):
+        """Helper that lays out a distance entry widget plus direction selector."""
         Label(row, text=label_text).grid(row=0, column=column, sticky="w")
         entry = Entry(row, width=6)
         entry.grid(row=0, column=column + 1, padx=(2, 2))
@@ -140,6 +145,7 @@ class SpeakerEditor(Frame):
         return entry, var
 
     def _default_position(self, index: int, total_count: int) -> np.ndarray:
+        """Return a sensible default cartesian position for a new speaker row."""
         if total_count == 2:
             x = -self.default_x / 2 if index == 0 else self.default_x / 2
             y = self.default_y

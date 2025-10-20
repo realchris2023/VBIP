@@ -49,6 +49,7 @@ from gui.app import AudioPanningApp
 
 # Center the window on the screen
 def center_window(root, width=1600, height=1200):
+    """Place the application window roughly in the centre of the primary screen."""
     screen_width = root.winfo_screenwidth()
     screen_height = root.winfo_screenheight()
     position_top = int(screen_height / 2 - height / 2)

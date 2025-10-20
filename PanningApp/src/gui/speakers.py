@@ -1,4 +1,4 @@
-"\"\"\"Helpers for managing speaker layouts and coordinate transforms.\"\"\""
+"""Helpers for managing speaker layouts and transforming between UI inputs and coordinates."""
 
 from __future__ import annotations
 
@@ -23,18 +23,22 @@ class SpeakerLayout:
     active_indices: List[int] = field(default_factory=list)
 
     def set_positions(self, vectors: Iterable[Sequence[float]]):
+        """Normalise and register the supplied loudspeaker coordinates."""
         self.positions = [self._vector3(vec) for vec in vectors]
         if not self.active_indices or len(self.active_indices) != len(self.positions):
             self.active_indices = list(range(len(self.positions)))
 
     def active_speakers(self) -> List[np.ndarray]:
+        """Return the active speaker subset, ignoring stale indices."""
         return [self.positions[idx] for idx in self.active_indices if idx < len(self.positions)]
 
     def ensure_vector(self, vector: Sequence[float]) -> np.ndarray:
+        """Force a coordinate into the 3D vector format used throughout the app."""
         return self._vector3(vector)
 
     @staticmethod
     def _vector3(vector: Sequence[float]) -> np.ndarray:
+        """Normalise an input coordinate into a 3-element numpy array."""
         arr = np.asarray(vector, dtype=float)
         if arr.shape[0] == 2:
             arr = np.append(arr, 0.0)
@@ -44,7 +48,7 @@ class SpeakerLayout:
 
 
 def coordinate_to_distance_direction(value: float, axis: str) -> Tuple[float, str]:
-    """Convert a signed coordinate into a magnitude and direction label."""
+    """Convert a signed coordinate into a positive distance plus human-readable direction."""
     distance = abs(value)
     if axis == "x":
         if value < 0:
@@ -68,7 +72,7 @@ def coordinate_to_distance_direction(value: float, axis: str) -> Tuple[float, st
 
 
 def distance_with_direction(distance: float, direction: str, axis: str) -> float:
-    """Translate a positive distance and direction label into a signed coordinate."""
+    """Translate a positive distance and direction label into a signed cartesian coordinate."""
     key = direction.lower()
     if axis == "x":
         if key == "left":
@@ -89,4 +93,3 @@ def distance_with_direction(distance: float, direction: str, axis: str) -> float
             return distance
         return 0.0
     raise ValueError(f"Unsupported axis: {axis}")
-

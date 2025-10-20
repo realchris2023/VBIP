@@ -1,10 +1,17 @@
+"""Standalone matplotlib helpers used for offline inspection and debugging."""
+
 import matplotlib.pyplot as plt
 import numpy as np
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  # Needed for 3D projection
 
 
 def plot_audio_channels(audio_chunk, channel_gains):
-    """Plot a short segment of the rendered channels."""
+    """Render the per-channel waveforms so gain activity is easy to inspect.
+
+    The GUI frequently runs with the faux-3D canvas, so this helper is handy
+    when we want to inspect how dramatic the per-channel content becomes for a
+    given virtual position (for example when polarity inversion kicks in).
+    """
     if channel_gains is None or len(channel_gains) == 0:
         print("No channel gains available for plotting.")
         return
@@ -40,7 +47,12 @@ def plot_audio_channels(audio_chunk, channel_gains):
 
 
 def plot_speaker_and_source_positions(speaker_positions, virtual_source_position):
-    """Plot speaker positions, listener, and virtual source in 3D space."""
+    """Plot speaker positions, listener, and virtual source in 3D space.
+
+    This is mostly used for documentation/debugging outside the Tk GUI where we
+    want a classic Matplotlib rendering of the loudspeaker array and the target
+    position, complete with axis labels and equal scaling.
+    """
     if len(speaker_positions) == 0:
         print("No speaker positions to plot.")
         return
