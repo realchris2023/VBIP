@@ -41,6 +41,7 @@ class AudioPanningApp:
         self.default_speaker_z_distance = 0.0
 
         # Speaker layout and virtual source state
+        # The 2 default speakers are initilised left-right, and their x distance is defined by half their distance, which ewuals their distance from center.
         self.layout = SpeakerLayout()
         initial_positions = [
             (-self.default_speaker_x_distance / 2, self.default_speaker_y_distance, self.default_speaker_z_distance),
