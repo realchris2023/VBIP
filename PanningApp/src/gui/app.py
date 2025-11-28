@@ -1,88 +1,42 @@
-"""Main GUI application for interactive VBAP panning experiments.
-
-The :class:`AudioPanningApp` stitches together the playback controls, virtual
-source visualisation, loudspeaker configuration widgets, and the underlying
-VBAP solver. A great deal of application state lives here so that updates in
-one part of the UI (for example adding a new speaker) are immediately reflected
-in every other component (e.g. the faux-3D room view and the gain solver).
-"""
-
 import sys
 import os
-from typing import Iterable, List, Sequence, Tuple
-
 import numpy as np
 import soundfile as sf
 import sounddevice as sd
-from tkinter import Tk, Frame, StringVar, OptionMenu, Button, Entry, Label
+from tkinter import Tk, Frame, Scale, HORIZONTAL, StringVar, OptionMenu, Button, Entry, Label
 from components.play_button import PlayButton
-from audio.vbap2d import calculate_gains as calculate_gains_2d
+from audio.vbap import calculate_gains
 
 from gui.plot import plot_audio_channels, plot_speaker_and_source_positions
-from gui.speakers import SpeakerLayout
-from gui.ui.pan_canvas import PanCanvas
-from gui.ui.speaker_editor import SpeakerEditor
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-
 class AudioPanningApp:
-    """Tkinter front-end that exposes VBAP playback, visualisation and editing."""
-
     def __init__(self, master):
-        """Bootstrap the UI, load defaults and initialise audio playback."""
-        self.master = master
-        self.frame = Frame(master)
-        self.frame.pack()
-
-        # Default geometry references used across the app
-        self.default_speaker_x_distance = 250.0
-        self.default_speaker_y_distance = 216.5
-        self.default_speaker_z_distance = 0.0
-
-        # Speaker layout and virtual source state
-        # The 2 default speakers are initilised left-right, and their x distance is defined by half their distance, which ewuals their distance from center.
-        self.layout = SpeakerLayout()
-        initial_positions = [
-            (-self.default_speaker_x_distance / 2, self.default_speaker_y_distance, self.default_speaker_z_distance),
-            (self.default_speaker_x_distance / 2, self.default_speaker_y_distance, self.default_speaker_z_distance),
+        self.pan_range_scale_limit = 10
+        
+        self.master = master  # Set the master widget
+        self.frame = Frame(master)  # Create a new frame widget
+        self.frame.pack()  # Pack the frame widget
+        self.default_speaker_x_distance = 250  # Default speaker distance in cm (Horizontal)
+        self.default_speaker_y_distance = 216.5  # Default speaker distance in cm (forward)
+        # Define default speaker positions in 2D space (x, y) in centimeters - further assignable in application
+        self.speaker_positions = [
+            np.array([-125, 216.5]),  # Left speaker
+            np.array([125, 216.5])    # Right speaker
         ]
-        self.layout.set_positions(initial_positions)
-        self.channel_count = len(self.layout.positions)
-        self.channel_gains = np.zeros(self.channel_count, dtype="float32")
-        self.virtual_source_position = np.array(
-            [0.0, self.default_speaker_y_distance, self.default_speaker_z_distance],
-            dtype=float,
-        )
+        self.virtual_source_position = np.array([0, self.speaker_positions[0][1]])  # Default virtual source position
 
-        # Transport controls
-        controls_bar = Frame(self.frame)
-        controls_bar.pack(anchor="w", pady=4)
-        self.play_button = PlayButton(controls_bar, self.play_audio)
-        self.play_button.pack(side="left", padx=5, pady=5)
-        Button(controls_bar, text="Stop", command=self.stop_audio).pack(side="left", padx=5, pady=5)
+        self.play_button = PlayButton(self.frame, self.play_audio)  # Create a play button and assign the play_audio method
+        self.play_button.pack(side='left', padx=5, pady=5)  # Pack the play button
 
-        # Virtual source canvas (top-down view with height)
-        self.pan_canvas = PanCanvas(
-            self.frame,
-            move_callback=self.set_virtual_position,
-            initial_position=self.virtual_source_position,
-        )
-        self.pan_canvas.pack(anchor="w", pady=8, padx=5)
+        self.stop_button = Button(self.frame, text="Stop", command=self.stop_audio)  # Create a stop button and assign the stop_audio method
+        self.stop_button.pack(side='left', padx=5, pady=5)  # Pack the stop button
 
-        # Speaker configuration editor
-        self.speaker_editor = SpeakerEditor(
-            self.frame,
-            layout=self.layout,
-            apply_callback=self._handle_speaker_positions,
-            default_distances=(
-                self.default_speaker_x_distance,
-                self.default_speaker_y_distance,
-                max(self.default_speaker_z_distance, 200.0),
-            ),
-        )
-        self.speaker_editor.pack(anchor="w", pady=10)
-        self._refresh_pan_canvas()
+        self.pan_knob = Scale(self.frame, from_= self.pan_range_scale_limit*(self.speaker_positions[0][0]), to= self.pan_range_scale_limit*self.speaker_positions[1][0], orient=HORIZONTAL, resolution=25, command=self.update_pan, length=400, sliderlength=30) # Create a larger pan-slider widget
+        
+        self.pan_knob.set(0.0)  # Initialize at center
+        self.pan_knob.pack() # Pack the pan-slider widget
 
         self.audio_directory = os.path.join(os.path.dirname(__file__), "..", "audio/audio_files") # Define the audio directory
         self._check_audio_directory() # Check if the audio directory exists
@@ -113,18 +67,18 @@ class AudioPanningApp:
             self.sample_rate = 44100
             self.audio_menu.pack()
 
+        self.create_speaker_input_fields() # Create input fields for speaker positions
+
         self.stream = None # Initialize audio stream
-        self.set_virtual_position()  # Initialize VBAP gains based on default virtual source position
+        self.update_pan(self.pan_knob.get()) # Update pan position from slider value
         self.playback_index = 0 # Initialize playback index
         
         # Experiment pan positions Menu
         self.experiment_pan_positions = self.calculate_experiment_pan_positions()
         self.selected_experiment_pan_position = StringVar()
-        default_index = 8 if len(self.experiment_pan_positions) > 8 else 0
-        self.selected_experiment_pan_position.set(self.experiment_pan_positions[default_index])
+        self.selected_experiment_pan_position.set(self.experiment_pan_positions[8])
         self.experiment_pan_positions_menu = OptionMenu(self.frame, self.selected_experiment_pan_position, *self.experiment_pan_positions)
         self.experiment_pan_positions_menu.pack()
-        self._refresh_experiment_menu()
 
         self.update_experiment_pan_button = Button(self.frame, text="Update Pan Position", command=self.update_experiment_pan_positions)
         self.update_experiment_pan_button.pack()
@@ -144,72 +98,52 @@ class AudioPanningApp:
         self.save_button = Button(self.frame, text="Save Audio", command=self.save_audio) # Create a save button
         self.save_button.pack() # Pack the save button
 
-    # ------------------------------------------------------------------
-    # Speaker layout management
-    # ------------------------------------------------------------------
-    def _handle_speaker_positions(self, positions: Iterable[Sequence[float]]):
-        """React to new loudspeaker coordinates originating from the editor."""
-        self.layout.set_positions(positions)
-        self.channel_count = len(self.layout.positions)
-        self.channel_gains = self._match_gain_vector(self.channel_count)
-        print(f"[SpeakerConfig] Updated speaker positions: {self.layout.positions}")
+    def create_speaker_input_fields(self):
+        """Create input fields for user to enter speaker coordinates."""
+        Label(self.frame, text="Horizontal distance between speakers(cm):").pack() # Create a label widget 
+        self.speakers_x_entry = Entry(self.frame) # Create an entry widget for speakers summed x-coordinate
+        self.speakers_x_entry.pack() # Pack the entry widget
+        self.speakers_x_entry.insert(0, "250")
 
-        self._refresh_pan_canvas()
-        self._clamp_virtual_source_to_bounds()
-        self.set_virtual_position()
-        self._refresh_experiment_menu()
+        Label(self.frame, text="Distance to wall (cm):").pack() # Create a label widget for speaker y-coordinate
+        self.speakers_y_entry = Entry(self.frame) # Create an entry widget for speaker y-coordinate
+        self.speakers_y_entry.pack() # Pack the entry widget
+        self.speakers_y_entry.insert(0, "216.5") # Set default value
 
-    def _refresh_pan_canvas(self):
-        """Synchronise the faux-3D canvas with the current loudspeaker layout."""
-        defaults = (
-            self.default_speaker_x_distance,
-            self.default_speaker_y_distance,
-            max(self.default_speaker_z_distance, 200.0),
-        )
-        self.pan_canvas.configure_scene(self.layout.active_speakers(), defaults)
+        update_button = Button(self.frame, text="Update Speaker Positions", command=self.update_speaker_positions) # Create a button to update speaker positions
+        update_button.pack() # Pack the button
 
-    def _refresh_experiment_menu(self):
-        self.experiment_pan_positions = self.calculate_experiment_pan_positions()
-        if not self.experiment_pan_positions:
-            self.experiment_pan_positions = [0.0]
-        self.selected_experiment_pan_position.set(self.experiment_pan_positions[0])
-        menu_widget = getattr(self, "experiment_pan_positions_menu", None)
-        if menu_widget is None:
-            return
-        menu_widget["menu"].delete(0, "end")
-        for value in self.experiment_pan_positions:
-            menu_widget["menu"].add_command(
-                label=value,
-                command=lambda v=value: self.selected_experiment_pan_position.set(v),
-            )
+    def update_speaker_positions(self):
+        """Update speaker positions based on user input."""
+        try:
+            speakers_x = float(self.speakers_x_entry.get())  # Convert input to float
+            left_x = float(np.negative(speakers_x / 2))  # Negative value for left
+            right_x = speakers_x / 2  # Positive value for right
+            y = float(self.speakers_y_entry.get())  # Y-coordinate is the same for both speakers
 
-    def _active_speakers(self, dims: int | None = 3) -> List[np.ndarray]:
-        """Return the active speaker set optionally truncated to ``dims`` dimensions."""
-        active = self.layout.active_speakers()
-        if dims is None or dims >= 3:
-            return active
-        return [speaker[:dims] for speaker in active]
+            self.speaker_positions = [
+                np.array([left_x, y]),  # Left speaker
+                np.array([right_x, y])  # Right speaker
+            ]
+            self.pan_knob.config(from_= self.pan_range_scale_limit * (self.speaker_positions[0][0]), to=self.pan_range_scale_limit * (self.speaker_positions[1][0])) # Update pan range
+            self.virtual_source_position = np.array([0, y])  # Update virtual source position
 
-    def _clamp_virtual_source_to_bounds(self):
-        """Clamp the virtual source to the canvas' current bounding box."""
-        bounds = getattr(self.pan_canvas, "bounds", None)
-        if bounds is None:
-            return
-        x = float(np.clip(self.virtual_source_position[0], bounds.x[0], bounds.x[1]))
-        y = float(np.clip(self.virtual_source_position[1], bounds.y[0], bounds.y[1]))
-        z = float(np.clip(self.virtual_source_position[2], bounds.z[0], bounds.z[1]))
-        self.virtual_source_position = np.array([x, y, z], dtype=float)
+            print(f"Updated speaker positions: {self.speaker_positions}")  # Debug print
+            print(f"Updated Virtual source position: {self.virtual_source_position}")  # Debug print
 
+            # Update experiment pan positions
+            self.experiment_pan_positions = self.calculate_experiment_pan_positions()
+            self.selected_experiment_pan_position.set(self.experiment_pan_positions[0])
+            self.experiment_pan_positions_menu['menu'].delete(0, 'end')
+            for position in self.experiment_pan_positions:
+                self.experiment_pan_positions_menu['menu'].add_command(label=position, command=lambda value=position: self.selected_experiment_pan_position.set(value))
+
+        except ValueError:
+            print("Invalid input for speaker coordinates. Please enter numeric values.")  # Error message
 
     def calculate_experiment_pan_positions(self):
-        """Build a symmetric list of panning offsets derived from speaker spacing."""
-        active = self._active_speakers(dims=2)
-        if len(active) < 2:
-            return [0.0]
-        xs = [speaker[0] for speaker in active]
-        distance = abs(max(xs) - min(xs))
-        if distance == 0:
-            return [0.0]
+        """Calculate experiment pan positions based on the distance between speakers."""
+        distance = self.speaker_positions[1][0]*2
         return [
             -1.5 * distance,
             -1.4 * distance,
@@ -245,23 +179,22 @@ class AudioPanningApp:
         ]
 
     def update_experiment_pan_positions(self):
-        """Move the virtual source to the preset selected in the experiment menu."""
+        """Update the pan position based on the selected experiment pan position."""
         pan_value = float(self.selected_experiment_pan_position.get())
-        self.set_virtual_position(x=pan_value)
+        self.pan_knob.set(pan_value)
+        self.update_pan(pan_value)
 
     def _check_audio_directory(self):
-        """Warn when the audio directory is missing, rather than failing later."""
-        if not os.path.exists(self.audio_directory):
-            print(f"Audio directory not found: {self.audio_directory}")
+        if not os.path.exists(self.audio_directory): # Check if the audio directory exists
+            print(f"Audio directory not found: {self.audio_directory}") # Print error message
         else:
-            print(f"Audio directory found: {self.audio_directory}")
+            print(f"Audio directory found: {self.audio_directory}") # Print success message
 
-    def _get_audio_files(self):
-        """Return available WAV files so the user can pick playback material."""
-        return [f for f in os.listdir(self.audio_directory) if f.endswith(".wav")]
+    def _get_audio_files(self): 
+        return [f for f in os.listdir(self.audio_directory) if f.endswith(".wav")] # Get audio files in the directory
 
     def load_audio_file(self, filename):
-        """Load audio (normalising to mono) and prepare it for real-time playback."""
+        # Accept either a filename or a full path
         if os.path.isabs(filename):
             path = filename
         else:
@@ -280,59 +213,28 @@ class AudioPanningApp:
         if hasattr(self.audio_samples, 'ndim') and self.audio_samples.ndim == 2:  # Check if 2 dimensional audio
             self.audio_samples = np.mean(self.audio_samples, axis=1)  # Average the stereo channels to convert to mono
 
-    def set_virtual_position(self, x=None, y=None, z=None):
-        """Update the virtual source position and recompute VBAP gains."""
-        position = np.array(self.virtual_source_position, dtype=float)
-        if x is not None:
-            position[0] = float(x)
-        if y is not None:
-            position[1] = float(y)
-        if z is not None:
-            position[2] = float(z)
-        self.virtual_source_position = position
-        self._clamp_virtual_source_to_bounds()
-        self._log_virtual_position("Requested update")
-
-        active_speakers = self._active_speakers()
-        if not active_speakers:
-            print("No active speakers configured.")
-            self.channel_gains = np.zeros(0, dtype='float32')
-            self.left_gain = 0.0
-            self.right_gain = 0.0
-            self.pan_canvas.update_virtual_position(self.virtual_source_position)
-            return
-
-        raw_gains = self._solve_channel_gains(self.virtual_source_position, active_speakers)
-        gain_vector = self._match_gain_vector(self.channel_count)
-        gain_vector.fill(0.0)
-        limit = min(len(raw_gains), gain_vector.shape[0])
-        if limit:
-            gain_vector[:limit] = raw_gains[:limit]
-        self.channel_gains = gain_vector
-        self.left_gain = gain_vector[0] if gain_vector.shape[0] > 0 else 0.0
-        self.right_gain = gain_vector[1] if gain_vector.shape[0] > 1 else 0.0
-        gain_norm = float(np.dot(self.channel_gains, self.channel_gains))
-        self._log_virtual_state(self.channel_gains, gain_norm)
-        self.pan_canvas.update_virtual_position(self.virtual_source_position)
-
-    def _log_virtual_position(self, reason: str):
-        """Print the current virtual-source coordinates in a readable format."""
-        x, y, z = self.virtual_source_position
-        print(f"[VirtualSource] {reason}: (x={x:7.2f} cm, y={y:7.2f} cm, z={z:7.2f} cm)")
-
-    def _log_virtual_state(self, gains: np.ndarray, gain_norm: float):
-        """Print the gain vector alongside the current virtual-source position."""
-        x, y, z = self.virtual_source_position
-        coords = f"x: {x:8.2f} | y: {y:8.2f} | z: {z:8.2f}"
-        gain_entries = " | ".join(f"ch {idx:02d}: {gain:8.4f}" for idx, gain in enumerate(gains))
-        print("\n___")
-        print(f"Virtual source (cm) | {coords}")
-        print(f"Channel gains      | {gain_entries}")
-        print(f"Sum of squared gains: {gain_norm:10.6f}")
-        print("___\n")
+    def update_pan(self, value): 
+        pan_value = float(value)
+        # Create vector from pan value and y-coordinate
+        self.virtual_source_position = self.get_virtual_source_position(pan_value, self.speaker_positions[0][1])
+        # Calculate gains
+        gains = calculate_gains(
+            self.speaker_positions[0],
+            self.speaker_positions[1],
+            self.virtual_source_position
+        )
+        self.left_gain = gains[0] # Left speaker gain
+        self.right_gain = gains[1] # Right speaker gain
+        print(f"Pan: {pan_value:.2f}, Position: {self.virtual_source_position}, Gains L/R: {self.left_gain:.2f}/{self.right_gain:.2f}")
+        print(f"Sum of squared gain factors: {np.pow(self.left_gain,2.) + np.pow(self.right_gain,2.):.4f}") # Debug print proving that gain factors are constant
+    
+    def get_virtual_source_position(self, pan_value, y_distance):
+        """Get the virtual source position (as a vector) from the pan value."""
+        x = pan_value # X-coordinate is the pan value
+        return np.array([x, y_distance]) # Return the virtual source position as a vector
 
     def play_audio(self):
-        """Start streaming audio through the current VBAP configuration."""
+        """Start the audio playback stream."""
         # close any existing stream cleanly
         self._safe_close_stream()
 
@@ -340,30 +242,23 @@ class AudioPanningApp:
         if not hasattr(self, 'sample_rate') or not hasattr(self, 'audio_samples'):
             print("No audio loaded to play.")
             return
-        channels = getattr(self, "channel_count", 0)
-        if channels < 1:
-            print("No speakers configured for playback.")
-            return
-        self._match_gain_vector(channels)
         self.stream = sd.OutputStream(
             samplerate=self.sample_rate,
-            channels=channels,
-            dtype='float32',
+            channels=2, dtype='float32',
             callback=self.audio_callback
         )
         self.stream.start()
 
     def save_audio(self):
-        """Render the current gains to disk alongside the input material."""
+        """Save the audio to a file."""
         postfix = int(self.virtual_source_position[0])  # Get the pan value as the postfix and cast to int
         if postfix or postfix == 0:
             save_filename = os.path.splitext(self.audio_file)[0] + f"_{postfix}.wav"
-            gains = self._match_gain_vector(self.channel_count)
-            if gains.size == 0:
-                print("No speaker gains available; cannot save multichannel audio.")
-                return
-            multichannel_audio = np.multiply.outer(self.audio_samples, gains).astype('float32', copy=False)
-            sf.write(save_filename, multichannel_audio, self.sample_rate)
+            # Apply VBAP gains to the audio samples
+            left_channel = self.audio_samples * self.left_gain
+            right_channel = self.audio_samples * self.right_gain
+            stereo_audio = np.column_stack((left_channel, right_channel))
+            sf.write(save_filename, stereo_audio, self.sample_rate)
             print(f"Audio saved as {save_filename}")
         else:
             print("Please enter a postfix to save the audio file.")
@@ -389,11 +284,8 @@ class AudioPanningApp:
         if len(chunk) < frames:
             chunk = np.pad(chunk, (0, frames - len(chunk)), 'constant')
         # Apply VBAP gains
-        gains = self._match_gain_vector(outdata.shape[1])
-        if gains.size == 0:
-            outdata.fill(0)
-            return
-        outdata[:] = chunk[:, np.newaxis] * gains[np.newaxis, :]
+        outdata[:, 0] = chunk * self.left_gain   # Left channel
+        outdata[:, 1] = chunk * self.right_gain  # Right channel
         self.playback_index += frames
 
     def _safe_close_stream(self):
@@ -411,124 +303,20 @@ class AudioPanningApp:
                 self.stream = None
         
     def plot_current_audio(self):
-        """Capture a short slice of audio so gain behaviour is visible."""
+        """Capture and plot current audio state."""
         # Get current chunk of audio
         start_idx = self.playback_index
         chunk_size = min(1000, len(self.audio_samples) - start_idx)
         audio_chunk = self.audio_samples[start_idx:start_idx + chunk_size]
         # Plot using the visualization function
-        plot_audio_channels(audio_chunk, self.channel_gains)
+        plot_audio_channels(
+            audio_chunk,
+            self.left_gain,
+            self.right_gain,
+            float(self.pan_knob.get())
+        )
         
     def plot_scatter_positions(self):
-        """Call the matplotlib helper to render the array and virtual source."""
-        plot_speaker_and_source_positions(
-            self._active_speakers(dims=3),
-            self.virtual_source_position,
-        )
+        """Plot the speaker positions, listener position, and virtual source position."""
+        plot_speaker_and_source_positions(self.speaker_positions, self.virtual_source_position, self.pan_range_scale_limit)
 
-    def _match_gain_vector(self, channel_count):
-        """Ensure the gain vector matches the latest channel count and dtype."""
-        current = getattr(self, "channel_gains", np.zeros(0, dtype='float32'))
-        if current.shape[0] == channel_count:
-            if current.dtype != np.float32:
-                current = current.astype('float32')
-                self.channel_gains = current
-            return current
-        updated = np.zeros(channel_count, dtype='float32')
-        length = min(current.shape[0], channel_count)
-        if length:
-            updated[:length] = current[:length]
-        self.channel_gains = updated
-        return self.channel_gains
-
-    def _solve_channel_gains(self, virtual_source, active_speakers=None):
-        """Compute loudspeaker gains for the virtual source, in 2D or 3D."""
-        if active_speakers is None:
-            active_speakers = self._active_speakers()
-        active_count = len(active_speakers)
-        if active_count < 2:
-            return np.zeros(active_count, dtype='float32')
-        if active_count == 2:
-            pair_2d = [speaker[:2] for speaker in active_speakers]
-            gains = calculate_gains_2d(pair_2d[0], pair_2d[1], virtual_source[:2])
-            return gains.astype('float32')
-        return self._solve_vbap_3d(np.asarray(active_speakers, dtype=float), np.asarray(virtual_source, dtype=float))
-
-    def _solve_vbap_3d(self, speakers, virtual_source):
-        """Select the best loudspeaker triplet and compute 3D VBAP gains."""
-        from itertools import combinations
-
-        virtual_norm = np.linalg.norm(virtual_source)
-        if virtual_norm <= 1e-9:
-            print("[VBAP3D] Virtual source too close to origin; returning mute gains.")
-            return np.zeros(speakers.shape[0], dtype='float32')
-
-        target_unit = virtual_source / virtual_norm
-        candidates = []
-
-        for combo in combinations(range(speakers.shape[0]), 3):
-            basis_vectors = []
-            skip_combo = False
-            for idx in combo:
-                vec = speakers[idx]
-                norm = np.linalg.norm(vec)
-                if norm <= 1e-9:
-                    skip_combo = True
-                    print(f"[VBAP3D] Speaker {idx} is at the listener; skipping combo {combo}.")
-                    break
-                basis_vectors.append(vec / norm)
-            if skip_combo:
-                continue
-
-            spread_matrix = np.column_stack(basis_vectors)
-            try:
-                gains = np.linalg.solve(spread_matrix, target_unit)
-            except np.linalg.LinAlgError:
-                print(f"[VBAP3D] Singular loudspeaker matrix for combo {combo}.")
-                continue
-
-            if not np.all(np.isfinite(gains)):
-                print(f"[VBAP3D] Non-finite gains for combo {combo}: {gains}")
-                continue
-
-            gain_norm = np.linalg.norm(gains)
-            if gain_norm <= 1e-12:
-                print(f"[VBAP3D] Degenerate gain vector for combo {combo}.")
-                continue
-
-            normalized_gains = gains / gain_norm
-            negative_contribution = np.sum(np.clip(-normalized_gains, 0.0, None))
-            negative_count = int(np.sum(normalized_gains < -1e-6))
-            residual = np.linalg.norm(spread_matrix @ normalized_gains - target_unit)
-
-            candidates.append(
-                (
-                    negative_count,
-                    negative_contribution,
-                    residual,
-                    combo,
-                    normalized_gains,
-                )
-            )
-            print(
-                f"[VBAP3D] Combo {combo} residual {residual:.4f}, "
-                f"neg_count {negative_count}, neg_sum {negative_contribution:.4f}, "
-                f"gains {normalized_gains}"
-            )
-
-        gains_vector = np.zeros(speakers.shape[0], dtype='float32')
-        if not candidates:
-            print("[VBAP3D] No valid loudspeaker triple found; returning silence.")
-            return gains_vector
-
-        # Prefer in-hull solutions (no negative gains), then least negative contribution, then best residual.
-        candidates.sort(key=lambda item: (item[0] > 0, item[1], item[2]))
-        negative_count, negative_contribution, residual, combo, best_gains = candidates[0]
-        print(
-            f"[VBAP3D] Selected combo {combo} "
-            f"(neg_count={negative_count}, neg_sum={negative_contribution:.4f}, residual={residual:.4f})."
-        )
-
-        for slot, gain in zip(combo, best_gains):
-            gains_vector[slot] = gain
-        return gains_vector
