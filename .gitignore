@@ -1,6 +1,7 @@
-PanningApp/src/gui/__pycache__/app.cpython-313.pyc
+*.pyc
 *.wav
 PanningApp/src/audio/audio_files/.DS_Store
 PanningApp/src/audio/.DS_Store
 PanningApp/src/.DS_Store
 PanningApp/ShuffleNums.java
+PanningApp/src/__pycache__/
