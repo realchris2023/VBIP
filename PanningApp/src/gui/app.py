@@ -6,6 +6,8 @@ import sounddevice as sd
 from tkinter import Tk, Frame, Scale, HORIZONTAL, StringVar, OptionMenu, Button, Entry, Label
 from components.play_button import PlayButton
 from audio.vbap import calculate_gains
+from gui.playlist_frame import PlaylistFrame
+from tkinter import Toplevel # Needed for new window
 
 from gui.plot import plot_audio_channels, plot_speaker_and_source_positions
 
@@ -97,7 +99,24 @@ class AudioPanningApp:
         self.save_postfix_entry.pack() # Pack the entry widget
         self.save_button = Button(self.frame, text="Save Audio", command=self.save_audio) # Create a save button
         self.save_button.pack() # Pack the save button
+        
+        # --- Experiment Mode Button ---
+        Label(self.frame, text="-----------------").pack(pady=10)
+        self.btn_exp = Button(self.frame, text=">> OPEN EXPERIMENT MODE <<", 
+                              bg="lightblue", command=self.open_experiment_window)
+        self.btn_exp.pack(pady=5, fill="x")
 
+    def open_experiment_window(self):
+        """Launches the dedicated Experiment Data Collection window."""
+        win = Toplevel(self.master)
+        win.title("Experiment Controller")
+        win.geometry("900x600")
+        
+        # Embed the PlaylistFrame
+        # Pass 'self' so it can control update_pan() and play_audio()
+        exp_interface = PlaylistFrame(win, self)
+        exp_interface.pack(fill="both", expand=True)
+        
     def create_speaker_input_fields(self):
         """Create input fields for user to enter speaker coordinates."""
         Label(self.frame, text="Horizontal distance between speakers(cm):").pack() # Create a label widget 
@@ -234,11 +253,12 @@ class AudioPanningApp:
         return np.array([x, y_distance]) # Return the virtual source position as a vector
 
     def play_audio(self):
-        """Start the audio playback stream."""
-        # close any existing stream cleanly
+        """Start the audio playback stream (Resets to start)."""
         self._safe_close_stream()
 
-        # ensure we have audio loaded
+        # RESET playback index to 0 so it plays from start every time
+        self.playback_index = 0 
+
         if not hasattr(self, 'sample_rate') or not hasattr(self, 'audio_samples'):
             print("No audio loaded to play.")
             return
@@ -269,25 +289,31 @@ class AudioPanningApp:
         self.playback_index = 0  # Reset playback index
         
     def audio_callback(self, outdata, frames, time, status):
-        """Process audio with VBAP gains."""
+        """Process audio with VBAP gains (Non-Looping)."""
         if status:
             print(f"Stream error: {status}")
             return
-        if self.playback_index >= len(self.audio_samples): # Reset playback if end is reached
-            self.playback_index = 0 
+            
+        # CHECK: Have we reached the end?
+        if self.playback_index >= len(self.audio_samples):
+            # Fill with silence and DO NOT reset index
             outdata.fill(0)
             return
+
         # Get audio chunk
         end_idx = min(self.playback_index + frames, len(self.audio_samples))
         chunk = self.audio_samples[self.playback_index:end_idx]
-        # Pad if needed
+        
+        # Pad with silence if chunk is smaller than buffer
         if len(chunk) < frames:
             chunk = np.pad(chunk, (0, frames - len(chunk)), 'constant')
+            
         # Apply VBAP gains
         outdata[:, 0] = chunk * self.left_gain   # Left channel
         outdata[:, 1] = chunk * self.right_gain  # Right channel
+        
         self.playback_index += frames
-
+            
     def _safe_close_stream(self):
         """Try to stop and close the output stream without raising exceptions."""
         if getattr(self, 'stream', None) is not None:
