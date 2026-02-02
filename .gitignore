@@ -24,3 +24,4 @@ PanningApp/src/gui/__pycache__/app.cpython-313.pyc
 PanningApp/src/gui/__pycache__/app.cpython-313.pyc
 PanningApp/dist/*
 PanningApp/build/*
+*.png

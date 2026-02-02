@@ -5,7 +5,7 @@ import sys
 from datetime import datetime
 
 # ==============================================================================
-# 1. EXPERIMENT PROFILES (Hardcoded Dimensions & Gain)
+# 1. EXPERIMENT PROFILES
 # ==============================================================================
 EXPERIMENT_PROFILES = {
     "EXP_1_AZIMUTH": {
@@ -13,7 +13,7 @@ EXPERIMENT_PROFILES = {
         "max_distance": 300.0,
         "directions": ("LEFT", "RIGHT"),
         "dimensions": {"speakers": 245.0, "wall": 212.0},
-        "gain": 1.0 
+        "gain": 0.5 # Dual Mono
     },
     "EXP_2_DIST_SINGLE": {
         "label": "2. Distance Single (Back / Front)",
@@ -73,56 +73,40 @@ class SymbolManager:
         return buttons
 
 # ==============================================================================
-# 3. SESSION MANAGER
+# 3. SESSION MANAGER (BUFFERED SAVE)
 # ==============================================================================
 class ExperimentSession:
-    def __init__(self, experiment_key, participant_id, audio_filename, dimensions):
+    def __init__(self, experiment_key, participant_id, audio_filename, dimensions, speaker_coords=None):
         self.config = EXPERIMENT_PROFILES[experiment_key]
         self.participant_id = participant_id
         self.audio_filename = audio_filename
         self.dimensions = dimensions 
+        self.speaker_coords = speaker_coords # NEW: Store actual coordinates
         self.start_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         
-        # --- PATH FIX: Always find 'experiment_data' at project root ---
+        # --- PATH FIX ---
         current_file_path = os.path.abspath(__file__)
-        # Go up 2 levels: src/gui -> src -> ProjectRoot
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_file_path)))
-        
         self.data_dir = os.path.join(project_root, "experiment_data")
         
         if not os.path.exists(self.data_dir):
-            try:
-                os.makedirs(self.data_dir)
-            except OSError:
-                self.data_dir = "experiment_data"
-                if not os.path.exists(self.data_dir): os.makedirs(self.data_dir)
+            try: os.makedirs(self.data_dir)
+            except OSError: self.data_dir = "experiment_data"
         
-        self.filepath = os.path.join(self.data_dir, f"{participant_id}_{experiment_key}_{self.start_time}.csv")
-        # ---------------------------------------------------------------
-
-        self._init_csv()
+        # Consolidated file per participant
+        self.filepath = os.path.join(self.data_dir, f"{participant_id}.csv")
+        
+        # Buffer: Data stays here until 'save_session_to_disk' is called
+        self.data_buffer = []
+        
         self.playlist = self._generate_playlist()
         self.current_trial_idx = -1
-
-    def _init_csv(self):
-        with open(self.filepath, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(["Experiment", self.config['label']])
-            writer.writerow(["Participant", self.participant_id])
-            writer.writerow(["Audio", self.audio_filename])
-            writer.writerow(["Gain Factor", self.config['gain']])
-            writer.writerow(["Date", self.start_time])
-            writer.writerow(["Speaker_Dist_CM", self.dimensions.get('speakers', 'N/A')])
-            writer.writerow(["Wall_Dist_CM", self.dimensions.get('wall', 'N/A')])
-            writer.writerow([])
-            writer.writerow(["Trial_ID", "Target_Side", "Target_CM", "Response_CM", "Error_CM", "Notes"])
 
     def _generate_playlist(self):
         max_d = int(self.config['max_distance'])
         neg_label, pos_label = self.config['directions']
         
         possible_positions = list(range(25, max_d + 1, 25))
-        
         neg_trials = [{"cm": -p, "side": neg_label} for p in possible_positions]
         pos_trials = [{"cm": p, "side": pos_label} for p in possible_positions]
         
@@ -136,18 +120,27 @@ class ExperimentSession:
             
         center_trial = {"cm": 0, "side": "CENTER"}
         playlist.insert(random.randint(0, len(playlist)//2), center_trial)
-
-        # DEBUG OUTPUT IN TERMINAL
-        print("\n" + "="*50)
-        print(f" EXPERIMENT: {self.config['label']}")
-        print(f" DIMS: Spk={self.dimensions['speakers']}cm | Wall={self.dimensions['wall']}cm")
-        print(f" GAIN: {self.config['gain']}x")
-        print("-" * 50)
-        print(f" FULL PLAYLIST ({len(playlist)} Trials):")
-        print("-" * 50)
+        
+        # --- DETAILED TERMINAL REPORT ---
+        print("\n" + "="*60)
+        print(f" EXPERIMENT STARTED: {self.config['label']}")
+        print(f" PARTICIPANT: {self.participant_id}")
+        print("-" * 60)
+        print(f" CONFIGURATIONS:")
+        print(f"   > Audio File:   {self.audio_filename}")
+        print(f"   > Setup Dims:   Speakers={self.dimensions['speakers']}cm | Wall={self.dimensions['wall']}cm")
+        print(f"   > Gain Factor:  {self.config['gain']}x")
+        if self.speaker_coords:
+            # Print cleanly formatted numpy arrays
+            print(f"   > Calculated Coords:")
+            print(f"       Left Speaker:  {self.speaker_coords[0]}")
+            print(f"       Right Speaker: {self.speaker_coords[1]}")
+        print("-" * 60)
+        print(f" PLAYLIST ({len(playlist)} Trials):")
         for i, t in enumerate(playlist):
-            print(f" {i+1:>2}. {t['side']:<8} {t['cm']:>5} cm")
-        print("="*50 + "\n")
+            print(f"   {i+1:>2}. {t['side']:<8} {t['cm']:>4} cm")
+        print("="*60 + "\n")
+        # --------------------------------
         
         return playlist
 
@@ -163,13 +156,50 @@ class ExperimentSession:
         return self.get_current_trial()
 
     def log_response(self, response_cm, notes=""):
+        """Store response in RAM. Do NOT write to disk yet."""
         trial = self.get_current_trial()
         if not trial: return
         target = trial['cm']
         error = abs(response_cm - target)
         
         row = [self.current_trial_idx + 1, trial['side'], target, response_cm, f"{error:.2f}", notes]
+        self.data_buffer.append(row)
+
+    def save_session_to_disk(self):
+        """Called ONLY when experiment completes successfully."""
+        file_exists = os.path.exists(self.filepath)
         
-        with open(self.filepath, 'a', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(row)
+        try:
+            with open(self.filepath, 'a', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                
+                # Separation between sessions
+                if file_exists:
+                    writer.writerow([])
+                    writer.writerow([])
+                    writer.writerow(["--- NEW SESSION ---"])
+                
+                # Session Header
+                writer.writerow(["Experiment", self.config['label']])
+                writer.writerow(["Participant", self.participant_id])
+                writer.writerow(["Audio", self.audio_filename])
+                writer.writerow(["Gain Factor", self.config['gain']])
+                writer.writerow(["Date", self.start_time])
+                writer.writerow(["Speaker_Dist_CM", self.dimensions.get('speakers', 'N/A')])
+                writer.writerow(["Wall_Dist_CM", self.dimensions.get('wall', 'N/A')])
+                
+                if self.speaker_coords:
+                    writer.writerow(["Calc_Coords_Left", self.speaker_coords[0]])
+                    writer.writerow(["Calc_Coords_Right", self.speaker_coords[1]])
+
+                writer.writerow([])
+                writer.writerow(["Trial_ID", "Target_Side", "Target_CM", "Response_CM", "Error_CM", "Notes"])
+                
+                # Flush Data Buffer
+                writer.writerows(self.data_buffer)
+                
+            print(f" -> SUCCESS: Session saved to {self.filepath}")
+            return True
+        except Exception as e:
+            print(f" -> ERROR SAVING CSV: {e}")
+            return False

@@ -38,11 +38,13 @@ class PlaylistFrame(tk.Frame):
         self.combo_audio.pack(side="left", padx=5)
         if audio_files: self.combo_audio.current(0)
         
+        # --- BUTTONS ---
         self.btn_start = tk.Button(f2, text="START SESSION", bg="#ccffcc", command=self.start_session)
         self.btn_start.pack(side="left", padx=20)
         
-        self.lbl_info = tk.Label(f2, text="(Auto-Configures App)", fg="blue", font=("Arial", 9))
-        self.lbl_info.pack(side="left")
+        # NEW BUTTON: REGENERATE GRAPHS
+        self.btn_regen = tk.Button(f2, text="UPDATE GRAPHS", command=self.regenerate_graphs)
+        self.btn_regen.pack(side="left", padx=5)
 
         # --- MID: STATUS ---
         ctrl_frame = tk.Frame(self)
@@ -66,6 +68,14 @@ class PlaylistFrame(tk.Frame):
         self.bind_all("<space>", lambda e: self.play_trial())
         self.bind_all("<Return>", lambda e: self.submit_manual())
 
+    def regenerate_graphs(self):
+        """Manually triggers the graph generation logic."""
+        try:
+            generate_aggregated_plots()
+            messagebox.showinfo("Success", "Graphs updated successfully!\nCheck the 'experiment_data' folder.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to generate graphs:\n{e}")
+
     def start_session(self):
         pid = self.entry_pid.get()
         exp_key = self.combo_exp.get()
@@ -75,17 +85,24 @@ class PlaylistFrame(tk.Frame):
         dims = config['dimensions']
         gain = config['gain']
         
+        # 1. Force App Updates
         self.app.speakers_x_entry.delete(0, tk.END)
         self.app.speakers_x_entry.insert(0, str(dims['speakers']))
         self.app.speakers_y_entry.delete(0, tk.END)
         self.app.speakers_y_entry.insert(0, str(dims['wall']))
-        self.app.update_speaker_positions()
+        
+        self.app.update_speaker_positions() 
         self.app.experiment_gain = gain 
         
-        self.lbl_info.config(text=f"Set to: Spk {dims['speakers']}cm | Wall {dims['wall']}cm | Gain {gain}x")
+        # 2. Retrieve calculated coordinates
+        calc_coords = self.app.speaker_positions 
+
+        self.lbl_status.config(text=f"Set to: Spk {dims['speakers']}cm | Wall {dims['wall']}cm | Gain {gain}x")
 
         self.app.load_audio_file(audio_file)
-        self.session = ExperimentSession(exp_key, pid, audio_file, dims)
+        
+        # 3. Create Session
+        self.session = ExperimentSession(exp_key, pid, audio_file, dims, speaker_coords=calc_coords)
         
         self._build_grid(self.session.config['max_distance'])
         self.btn_start.config(state="disabled")
@@ -102,7 +119,6 @@ class PlaylistFrame(tk.Frame):
         def create_btn(parent, cfg, sign):
             cm_val = cfg['cm'] * sign
             
-            # Minus sign logic
             txt = cfg['label']
             if sign == -1 and cfg['cm'] > 0:
                 parts = txt.split('\n')
@@ -153,16 +169,22 @@ class PlaylistFrame(tk.Frame):
         trial = self.session.next_trial()
         
         if not trial:
-            self.lbl_status.config(text="DONE! Processing...", fg="blue")
+            self.lbl_status.config(text="DONE! Saving...", fg="blue")
             self.btn_play.config(state="disabled")
             
-            try:
-                generate_aggregated_plots() 
-                msg = f"Saved CSV to:\n{self.session.filepath}\n\nUpdated Graphs in /experiment_data/"
-            except Exception as e:
-                msg = f"Saved CSV.\nGraph Error: {e}"
-                
+            success = self.session.save_session_to_disk()
+            
+            if success:
+                try:
+                    generate_aggregated_plots() 
+                    msg = f"Session Saved: {self.session.filepath}\nGraphs Updated."
+                except Exception as e:
+                    msg = f"Saved CSV, but Graph Error: {e}"
+            else:
+                msg = "CRITICAL ERROR: Could not save CSV!"
+
             self.lbl_status.config(text="SESSION COMPLETE", fg="green")
+            self.btn_start.config(state="normal") 
             messagebox.showinfo("Finished", msg)
             return
             
