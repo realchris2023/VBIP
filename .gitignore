@@ -21,3 +21,4 @@ PanningApp/src/audio/__pycache__/vbap.cpython-313.pyc
 PanningApp/src/audio/audio_files/.DS_Store
 PanningApp/src/gui/__pycache__/app.cpython-313.pyc
 *.csv
+PanningApp/src/gui/__pycache__/app.cpython-313.pyc
