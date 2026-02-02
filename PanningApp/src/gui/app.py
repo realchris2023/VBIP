@@ -40,7 +40,15 @@ class AudioPanningApp:
         self.pan_knob.set(0.0)
         self.pan_knob.pack()
 
-        self.audio_directory = os.path.join(os.path.dirname(__file__), "..", "audio/audio_files")
+        # FIX FOR PYINSTALLER
+        if getattr(sys, 'frozen', False):
+        # Running as compiled app
+            base_path = sys._MEIPASS
+            self.audio_directory = os.path.join(base_path, "src", "audio", "audio_files")
+        else:
+        # Running as script
+            self.audio_directory = os.path.join(os.path.dirname(__file__), "..", "audio/audio_files")
+            
         self._check_audio_directory()
         self.audio_files = self._get_audio_files()
         self.selected_audio = StringVar()

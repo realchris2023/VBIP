@@ -1,6 +1,7 @@
 import csv
 import random
 import os
+import sys
 from datetime import datetime
 
 # ==============================================================================
@@ -82,12 +83,24 @@ class ExperimentSession:
         self.dimensions = dimensions 
         self.start_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         
-        if not os.path.exists("experiment_data"):
-            os.makedirs("experiment_data")
-            
-        self.filepath = f"experiment_data/{participant_id}_{experiment_key}_{self.start_time}.csv"
-        self._init_csv()
+        # --- PATH FIX: Always find 'experiment_data' at project root ---
+        current_file_path = os.path.abspath(__file__)
+        # Go up 2 levels: src/gui -> src -> ProjectRoot
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_file_path)))
         
+        self.data_dir = os.path.join(project_root, "experiment_data")
+        
+        if not os.path.exists(self.data_dir):
+            try:
+                os.makedirs(self.data_dir)
+            except OSError:
+                self.data_dir = "experiment_data"
+                if not os.path.exists(self.data_dir): os.makedirs(self.data_dir)
+        
+        self.filepath = os.path.join(self.data_dir, f"{participant_id}_{experiment_key}_{self.start_time}.csv")
+        # ---------------------------------------------------------------
+
+        self._init_csv()
         self.playlist = self._generate_playlist()
         self.current_trial_idx = -1
 
@@ -108,7 +121,6 @@ class ExperimentSession:
         max_d = int(self.config['max_distance'])
         neg_label, pos_label = self.config['directions']
         
-        # Grid steps: 25, 50 ... max
         possible_positions = list(range(25, max_d + 1, 25))
         
         neg_trials = [{"cm": -p, "side": neg_label} for p in possible_positions]
@@ -118,7 +130,6 @@ class ExperimentSession:
         random.shuffle(pos_trials)
         
         playlist = []
-        # Strict Alternation
         for i in range(min(len(neg_trials), len(pos_trials))):
             playlist.append(neg_trials[i])
             playlist.append(pos_trials[i])
@@ -126,7 +137,7 @@ class ExperimentSession:
         center_trial = {"cm": 0, "side": "CENTER"}
         playlist.insert(random.randint(0, len(playlist)//2), center_trial)
 
-        # --- TERMINAL OUTPUT ---
+        # DEBUG OUTPUT IN TERMINAL
         print("\n" + "="*50)
         print(f" EXPERIMENT: {self.config['label']}")
         print(f" DIMS: Spk={self.dimensions['speakers']}cm | Wall={self.dimensions['wall']}cm")
@@ -135,10 +146,8 @@ class ExperimentSession:
         print(f" FULL PLAYLIST ({len(playlist)} Trials):")
         print("-" * 50)
         for i, t in enumerate(playlist):
-            # Print clearly: "1. LEFT -125 cm"
             print(f" {i+1:>2}. {t['side']:<8} {t['cm']:>5} cm")
         print("="*50 + "\n")
-        # -----------------------
         
         return playlist
 

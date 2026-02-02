@@ -2,8 +2,6 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import os
 from .experiment_logic import EXPERIMENT_PROFILES, ExperimentSession, SymbolManager
-
-# NEW IMPORT
 from .data_analysis import generate_aggregated_plots
 
 class PlaylistFrame(tk.Frame):
@@ -104,6 +102,7 @@ class PlaylistFrame(tk.Frame):
         def create_btn(parent, cfg, sign):
             cm_val = cfg['cm'] * sign
             
+            # Minus sign logic
             txt = cfg['label']
             if sign == -1 and cfg['cm'] > 0:
                 parts = txt.split('\n')
@@ -153,14 +152,12 @@ class PlaylistFrame(tk.Frame):
     def _load_next_trial(self):
         trial = self.session.next_trial()
         
-        # --- END OF SESSION ---
         if not trial:
             self.lbl_status.config(text="DONE! Processing...", fg="blue")
             self.btn_play.config(state="disabled")
             
-            # --- NEW: Trigger Graph Generation ---
             try:
-                generate_aggregated_plots() # Scans folder and updates graphs
+                generate_aggregated_plots() 
                 msg = f"Saved CSV to:\n{self.session.filepath}\n\nUpdated Graphs in /experiment_data/"
             except Exception as e:
                 msg = f"Saved CSV.\nGraph Error: {e}"
