@@ -41,7 +41,6 @@ class PlaylistFrame(tk.Frame):
         self.btn_start = tk.Button(f2, text="START SESSION", bg="#ccffcc", command=self.start_session)
         self.btn_start.pack(side="left", padx=20)
         
-        # Read-Only Info Display
         self.lbl_info = tk.Label(f2, text="(Distances loaded from Main App)", fg="gray", font=("Arial", 9))
         self.lbl_info.pack(side="left")
 
@@ -77,7 +76,6 @@ class PlaylistFrame(tk.Frame):
         exp_key = self.combo_exp.get()
         audio_file = self.combo_audio.get()
         
-        # 1. Grab Dimensions from Main App
         try:
             dims = {
                 'speakers': self.app.speakers_x_entry.get(),
@@ -87,14 +85,9 @@ class PlaylistFrame(tk.Frame):
         except:
             dims = {'speakers': 'Error', 'wall': 'Error'}
 
-        # 2. Init Session
         self.app.load_audio_file(audio_file)
         self.session = ExperimentSession(exp_key, pid, audio_file, dims)
-        
-        # 3. Build UI
         self._build_grid(self.session.config['max_distance'])
-        
-        # 4. Start
         self.btn_start.config(state="disabled")
         self.btn_play.config(state="normal")
         self._load_next_trial()
@@ -104,30 +97,24 @@ class PlaylistFrame(tk.Frame):
         for w in self.frame_pos.winfo_children(): w.destroy()
         
         configs = SymbolManager.get_button_config(max_dist)
-        
-        # COLOR MAPPING (For Text/Foreground to work on Mac)
-        fg_colors = {
-            "BLACK": "black", 
-            "RED": "#D00000",   # Darker red for readability
-            "GREEN": "#008000", # Darker green
-            "BLUE": "#0000CC"   # Darker blue
-        }
+        fg_colors = {"BLACK": "black", "RED": "#D00000", "GREEN": "#008000", "BLUE": "#0000CC"}
 
         def create_btn(parent, cfg, sign):
             cm_val = cfg['cm'] * sign
-            txt = cfg['label']
             
-            # Using 'fg' (foreground) for color, 'font' for visibility
-            btn = tk.Button(parent, text=txt, fg=fg_colors[cfg['color']], 
-                            width=5, height=2, font=("Arial", 12, "bold"))
+            # --- FIX: Initial State (Slim) ---
+            # borderwidth=1, relief="raised"
+            btn = tk.Button(parent, text=cfg['label'], fg=fg_colors[cfg['color']], 
+                            width=5, height=2, font=("Arial", 12, "bold"),
+                            borderwidth=1, relief="raised")
+            # ---------------------------------
             
             btn.config(command=lambda b=btn, v=cm_val: self.on_btn_click(b, v))
             
-            # Layout
             idx = int(cfg['cm'] / 25)
             row = idx // 4
             col = idx % 4
-            if sign == -1: col = 3 - col # Mirror negative side
+            if sign == -1: col = 3 - col 
             
             btn.grid(row=row, column=col, padx=2, pady=2)
 
@@ -137,12 +124,15 @@ class PlaylistFrame(tk.Frame):
                 create_btn(self.frame_neg, cfg, -1)
 
     def on_btn_click(self, btn, cm_val):
-        # Toggle logic
         if btn in [x[0] for x in self.selected_buttons]:
-            btn.config(relief="raised", borderwidth=1) # Deselect
+            # --- FIX: Untoggled State (Slim) ---
+            btn.config(relief="raised", borderwidth=1)
+            # -----------------------------------
             self.selected_buttons = [x for x in self.selected_buttons if x[0] != btn]
         else:
-            btn.config(relief="sunken", borderwidth=3) # Select
+            # --- FIX: Toggled State (Bold/Sunken) ---
+            btn.config(relief="solid", borderwidth=4)
+            # ----------------------------------------
             self.selected_buttons.append((btn, cm_val))
             
         if len(self.selected_buttons) > 2:
@@ -158,7 +148,6 @@ class PlaylistFrame(tk.Frame):
         
         self.session.log_response(avg, note)
         
-        # Reset UI
         for btn, _ in self.selected_buttons:
             btn.config(relief="raised", borderwidth=1)
         self.selected_buttons.clear()
