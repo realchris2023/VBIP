@@ -24,9 +24,9 @@ except ImportError:
 
 # --- CONFIGURATION: EXPERIMENT RADII ---
 RADII = {
-    "Azimuth": 212.0,
-    "Elevation": 212.0,
-    "Distance": 145.0  
+    "Azimuth": 212.0,   # Equilateral (245cm span)
+    "Elevation": 160.0, # Closer dist for +/- 30 deg (185cm span)
+    "Distance": 145.0   # Sitting on floor
 }
 
 def generate_aggregated_plots(data_folder_name="experiment_data"):
@@ -163,37 +163,29 @@ def _add_reference_lines(exp_name, use_deg):
 
     # --- DEFINE GEOMETRY ---
     
-    # 1. ELEVATION (Single & Dual)
     if "Elevation" in exp_name:
         speakers = [-92.5, 92.5]
-        boundaries = [-127.5, 137.5] # Floor and Ceiling
+        boundaries = [-127.5, 137.5] # Floor, Ceiling
         boundary_labels = ["Floor", "Ceiling"]
         
-    # 2. AZIMUTH
     elif "Azimuth" in exp_name:
         speakers = [-122.5, 122.5]
         boundaries = [] 
         
-    # 3. DISTANCE DUAL (Dual Mono)
-    elif "Distance" in exp_name and "Dual" in exp_name:
+    elif "Distance" in exp_name:
         speakers = [-122.5, 122.5]
-        boundaries = [-122.5] 
-        boundary_labels = ["Rear Wall"]
-        
-    # 4. DISTANCE SINGLE
-    elif "Distance" in exp_name and "Single" in exp_name:
-        speakers = [-122.5, 122.5] # Speakers are still there
-        boundaries = [] 
-        
+        if "Dual" in exp_name:
+            boundaries = [-122.5] 
+            boundary_labels = ["Rear Wall"]
+        else:
+            boundaries = []
     else:
-        # Fallback if we can't determine type
         return
 
     # --- PLOT SPEAKERS (Gray Dashed) ---
     for pos in speakers:
         val = _cm_to_deg(pos, radius) if use_deg else pos
         plt.axvline(x=val, color='gray', linestyle='--', alpha=0.5, linewidth=1.5)
-        # Label at top
         plt.text(val, plt.ylim()[1], 'Spk', rotation=90, verticalalignment='top', color='gray', fontsize=10)
 
     # --- PLOT BOUNDARIES (Red Dotted) ---
@@ -202,7 +194,6 @@ def _add_reference_lines(exp_name, use_deg):
         label = boundary_labels[i] if i < len(boundary_labels) else "Wall"
         
         plt.axvline(x=val, color='red', linestyle=':', alpha=0.6, linewidth=2.0)
-        # Label at bottom
         plt.text(val, plt.ylim()[0], label, rotation=90, verticalalignment='bottom', color='red', fontsize=10)
 
 
@@ -356,7 +347,6 @@ def _plot_method_comparison(experiments, folder, dim, k1, k2, use_deg=False):
         min_x, max_x = min(all_x), max(all_x)
         plt.plot([min_x, max_x], [min_x, max_x], 'k--', alpha=0.3, label="Ideal")
 
-    # Use reference lines for single (default) or dual if active
     ref_exp = label_dual if "Dual" in label_dual else label_single
     _add_reference_lines(ref_exp, use_deg)
 
@@ -423,8 +413,10 @@ def _plot_master_grouped_position_error(raw_data_flat, folder, use_deg=False):
     colors = plt.cm.tab10(np.linspace(0, 1, num_exps))
     
     if use_deg:
+        # NOTE: Grouped Bars use Index (CM) for grouping, labels in degrees?
+        # Mixing them is tricky. Let's keep X-Labels as CM for clarity of position.
         xtick_labels = [int(p) for p in sorted_positions]
-        xlabel = "Target Position (cm) - [Converted Y to Degrees]"
+        xlabel = "Target Position (cm) [Y is Degrees]"
     else:
         xtick_labels = [int(p) for p in sorted_positions]
         xlabel = "Target Position (cm)"
@@ -490,20 +482,26 @@ def _plot_detailed_error_vs_position(exp_name, data_list, folder, use_deg=False)
     safe = "".join([c for c in short if c.isalnum() or c in (' ', '_')]).strip().replace(" ", "_")
     
     if use_deg:
-        xticklabels = [f"{_cm_to_deg(t, radius):.1f}°" for t in targets]
+        # HERE IS THE FIX: Plot the boxes at DEGREE positions
+        plot_positions = [_cm_to_deg(t, radius) for t in targets]
+        xticklabels = [f"{p:.1f}°" for p in plot_positions]
         xlabel = "Target (Degrees)"
+        # Reduce box width for Degree scale
+        box_width = 4 
     else:
+        plot_positions = targets
         xticklabels = [int(t) for t in targets]
         xlabel = "Target (cm)"
+        box_width = 15
 
     plt.figure(figsize=(14, 7))
     plt.axhline(0, color='black')
-    plt.boxplot([grouped[t] for t in targets], positions=targets, widths=15, showfliers=False)
+    plt.boxplot([grouped[t] for t in targets], positions=plot_positions, widths=box_width, showfliers=False)
     
     _add_reference_lines(exp_name, use_deg)
     
     plt.title(f"BIAS: {short} [{unit}]")
-    plt.xticks(targets, xticklabels, rotation=45)
+    plt.xticks(plot_positions, xticklabels, rotation=45)
     plt.xlabel(xlabel)
     plt.ylabel(f"Error ({unit})")
     plt.grid(True, linestyle=':')
