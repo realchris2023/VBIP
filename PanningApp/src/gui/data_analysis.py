@@ -1,18 +1,23 @@
 import os
 import csv
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 import numpy as np
 from collections import defaultdict
+from scipy.interpolate import UnivariateSpline 
+from matplotlib.ticker import MultipleLocator
 
 # --- 1. GLOBAL VISUAL SETTINGS ---
 plt.rcParams.update({
-    'font.size': 14,
-    'axes.titlesize': 16,
-    'axes.labelsize': 15,
-    'xtick.labelsize': 12,
-    'ytick.labelsize': 12,
-    'legend.fontsize': 12,
-    'lines.linewidth': 2.5,
+    'font.family': 'sans-serif',
+    'font.size': 11,
+    'axes.labelsize': 12,
+    'axes.titlesize': 13,
+    'xtick.labelsize': 10,
+    'ytick.labelsize': 10,
+    'legend.fontsize': 9,
+    'lines.linewidth': 2.0,
+    'figure.figsize': (8, 8),
     'figure.autolayout': True
 })
 
@@ -24,10 +29,14 @@ except ImportError:
 
 # --- CONFIGURATION: EXPERIMENT RADII ---
 RADII = {
-    "Azimuth": 212.0,   # Equilateral (245cm span)
-    "Elevation": 160.0, # Closer dist for +/- 30 deg (185cm span)
-    "Distance": 145.0   # Sitting on floor
+    "Azimuth": 212.0,   
+    "Elevation": 160.0, 
+    "Distance": 145.0   
 }
+
+# --- GLOBAL AXIS LIMITS (For Comparability) ---
+# We lock both X and Y axes to +/- 75 degrees to keep scales 1:1
+AXIS_LIMIT = 75.0 
 
 def generate_aggregated_plots(data_folder_name="experiment_data"):
     
@@ -94,23 +103,10 @@ def generate_aggregated_plots(data_folder_name="experiment_data"):
 
     print(f"Processed {files_processed} CSV files.")
 
-    # --- 1. GENERATE GRAPHS (CM) ---
-    for exp_label, audio_groups in experiments.items():
-        _plot_multi_line_experiment(exp_label, audio_groups, data_folder, use_deg=False)
-
-    _plot_master_comparison(experiments, data_folder, use_deg=False)
-    _plot_method_comparison(experiments, data_folder, "Distance", "2. Distance Single", "3. Distance Dual", use_deg=False)
-    _plot_method_comparison(experiments, data_folder, "Elevation", "4. Elevation Single", "5. Elevation Dual", use_deg=False)
-    _plot_master_absolute_error(raw_data_flat, data_folder, use_deg=False)
-    _plot_master_grouped_position_error(raw_data_flat, data_folder, use_deg=False)
-    _plot_master_signed_error(raw_data_flat, data_folder, use_deg=False)
+    # --- GENERATE GRAPHS ---
+    print("Generating Thesis Angular (Degree) Graphs...")
     
-    for exp_label in raw_data_flat.keys():
-        _plot_detailed_error_vs_position(exp_label, raw_data_flat[exp_label], data_folder, use_deg=False)
-
-    # --- 2. GENERATE GRAPHS (DEGREES) ---
-    print("Generating Angular (Degree) Graphs...")
-    
+    # 1. Standard Error Bar Graphs (IQR)
     for exp_label, audio_groups in experiments.items():
         _plot_multi_line_experiment(exp_label, audio_groups, data_folder, use_deg=True)
 
@@ -118,16 +114,23 @@ def generate_aggregated_plots(data_folder_name="experiment_data"):
     _plot_method_comparison(experiments, data_folder, "Distance", "2. Distance Single", "3. Distance Dual", use_deg=True)
     _plot_method_comparison(experiments, data_folder, "Elevation", "4. Elevation Single", "5. Elevation Dual", use_deg=True)
     
-    # NOTE: We keep Mean for this ONE summary graph to match the T-Test
+    # 2. Spline Trend Graphs
+    print("Generating Reactive Spline Graphs...")
+    for exp_label, audio_groups in experiments.items():
+        _plot_multi_line_spline_trend(exp_label, audio_groups, data_folder)
+        
+    _plot_method_comparison_spline(experiments, data_folder, "Distance", "2. Distance Single", "3. Distance Dual")
+    _plot_method_comparison_spline(experiments, data_folder, "Elevation", "4. Elevation Single", "5. Elevation Dual")
+
+    # 3. Detailed & Bias
     _plot_master_absolute_error(raw_data_flat, data_folder, use_deg=True)
-    
-    _plot_master_grouped_position_error(raw_data_flat, data_folder, use_deg=True)
+    _plot_master_grouped_position_error_lines(raw_data_flat, data_folder, use_deg=True)
     _plot_master_signed_error(raw_data_flat, data_folder, use_deg=True)
 
     for exp_label in raw_data_flat.keys():
         _plot_detailed_error_vs_position(exp_label, raw_data_flat[exp_label], data_folder, use_deg=True)
 
-    # --- 3. REPORTS ---
+    # --- REPORTS ---
     _generate_leaderboard_file(participant_scores, data_folder)
     if stats:
         _generate_statistical_report(raw_data_flat, data_folder)
@@ -146,366 +149,470 @@ def _cm_to_deg(cm_val, radius):
     return np.degrees(np.arctan(cm_val / radius))
 
 def _shorten_name(exp_name):
+    if str(exp_name).lower().endswith('.wav'):
+        return str(exp_name)[:-4]
     if '.' in exp_name:
         parts = exp_name.split('.')
         if len(parts) > 1: return parts[1].split('(')[0].strip()
     return exp_name
 
-def _add_reference_lines(exp_name, use_deg):
-    """
-    Adds vertical lines for Speakers (Gray) and Room Boundaries (Red).
-    """
-    radius = _get_radius_for_exp(exp_name)
-    
-    speakers = []
-    boundaries = []
-    boundary_labels = []
+def _calculate_dynamic_limits(values, padding_percent=0.15):
+    return AXIS_LIMIT
 
-    # --- DEFINE GEOMETRY ---
+def _add_ideal_line(ax, limit):
+    ax.plot([-limit, limit], [-limit, limit], color='gray', linestyle='--', linewidth=1, label='Ideal (y=x)', zorder=0)
+
+def _add_reference_lines(ax, exp_name, use_deg, y_limit):
+    radius = _get_radius_for_exp(exp_name)
+    speakers, boundaries = [], []
+    spk_labels, bnd_labels = [], []
     
     if "Elevation" in exp_name:
         speakers = [-92.5, 92.5]
-        boundaries = [-127.5, 137.5] # Floor, Ceiling
-        boundary_labels = ["Floor", "Ceiling"]
-        
+        spk_labels = ["Floor LS", "Ceiling LS"]
+        boundaries = [-127.5, 137.5]
+        bnd_labels = ["Floor", "Ceiling"]
     elif "Azimuth" in exp_name:
         speakers = [-122.5, 122.5]
-        boundaries = [] 
-        
+        spk_labels = ["Left LS", "Right LS"]
     elif "Distance" in exp_name:
         speakers = [-122.5, 122.5]
+        spk_labels = ["Rear LS", "Front LS"]
         if "Dual" in exp_name:
-            boundaries = [-122.5] 
-            boundary_labels = ["Rear Wall"]
-        else:
-            boundaries = []
+            boundaries = [-122.5]
+            bnd_labels = ["Rear Wall"]
     else:
         return
 
-    # --- PLOT SPEAKERS (Gray Dashed) ---
-    for pos in speakers:
+    for i, pos in enumerate(speakers):
         val = _cm_to_deg(pos, radius) if use_deg else pos
-        plt.axvline(x=val, color='gray', linestyle='--', alpha=0.5, linewidth=1.5)
-        plt.text(val, plt.ylim()[1], 'Spk', rotation=90, verticalalignment='top', color='gray', fontsize=10)
+        if abs(val) > y_limit: continue
+        ax.axvline(x=val, color='gray', linestyle='--', alpha=0.5, linewidth=1.5, zorder=0)
+        label = spk_labels[i] if i < len(spk_labels) else "LS"
+        ax.text(val, y_limit*0.95, label, rotation=90, verticalalignment='top', 
+                color='gray', fontsize=8, ha='right')
 
-    # --- PLOT BOUNDARIES (Red Dotted) ---
     for i, pos in enumerate(boundaries):
         val = _cm_to_deg(pos, radius) if use_deg else pos
-        label = boundary_labels[i] if i < len(boundary_labels) else "Wall"
-        
-        plt.axvline(x=val, color='red', linestyle=':', alpha=0.6, linewidth=2.0)
-        plt.text(val, plt.ylim()[0], label, rotation=90, verticalalignment='bottom', color='red', fontsize=10)
+        if abs(val) > y_limit: continue
+        ax.axvline(x=val, color='red', linestyle=':', alpha=0.6, linewidth=1.5, zorder=0)
+        label = bnd_labels[i] if i < len(bnd_labels) else "Wall"
+        ax.text(val, -y_limit*0.95, label, rotation=90, verticalalignment='bottom', 
+                color='red', fontsize=8, ha='right')
 
+def _set_10deg_grid(ax):
+    """Applies a 10-degree dotted grid."""
+    ax.xaxis.set_major_locator(MultipleLocator(10))
+    ax.yaxis.set_major_locator(MultipleLocator(10))
+    ax.grid(True, linestyle=':', alpha=0.6)
 
 # ==============================================================================
-# PLOTTING FUNCTIONS
+# 1. ERROR BAR PLOTS (IQR)
 # ==============================================================================
 
 def _plot_multi_line_experiment(exp_name, audio_groups, folder, use_deg=False):
-    plt.figure(figsize=(10, 6))
-    all_targets = []
-    for targets_dict in audio_groups.values(): all_targets.extend(targets_dict.keys())
-    if not all_targets: 
-        plt.close()
-        return
-        
+    if not use_deg: return
+    fig, ax = plt.subplots(figsize=(7, 7))
     radius = _get_radius_for_exp(exp_name)
-    suffix = "_DEG" if use_deg else ""
-    unit = "Degrees" if use_deg else "cm"
-    
-    min_t, max_t = min(all_targets), max(all_targets)
-    if use_deg:
-        min_d = _cm_to_deg(min_t, radius)
-        max_d = _cm_to_deg(max_t, radius)
-        plt.plot([min_d, max_d], [min_d, max_d], 'k--', alpha=0.3, label="Ideal", linewidth=2)
-    else:
-        plt.plot([min_t, max_t], [min_t, max_t], 'k--', alpha=0.3, label="Ideal", linewidth=2)
+    colors = plt.cm.tab10(np.linspace(0, 1, max(len(audio_groups), 3)))
 
-    colors = plt.cm.tab10(np.linspace(0, 1, len(audio_groups)))
-    
     for i, (audio, data) in enumerate(audio_groups.items()):
         targets = sorted(data.keys())
-        medians = [] 
-        stds = []
-        x_vals = []
+        medians, err_low, err_high, x_vals = [], [], [], []
         
         for t in targets:
-            responses = data[t]
-            if use_deg:
-                x_val = _cm_to_deg(t, radius)
-                resp_val = [_cm_to_deg(r, radius) for r in responses]
-            else:
-                x_val = t
-                resp_val = responses
-                
-            x_vals.append(x_val)
-            medians.append(np.median(resp_val))
-            stds.append(np.std(resp_val))
+            responses = [_cm_to_deg(r, radius) for r in data[t]]
+            x_val = _cm_to_deg(t, radius)
+            q1 = np.percentile(responses, 25)
+            q3 = np.percentile(responses, 75)
+            med = np.median(responses)
             
-        plt.errorbar(x_vals, medians, yerr=stds, fmt='o-', label=os.path.basename(audio), capsize=4, color=colors[i])
+            x_vals.append(x_val) 
+            medians.append(med)
+            err_low.append(med - q1)
+            err_high.append(q3 - med)
         
-    _add_reference_lines(exp_name, use_deg)
+        ax.errorbar(x_vals, medians, yerr=[err_low, err_high], fmt='o-', 
+                    label=_shorten_name(os.path.basename(audio)), 
+                    color=colors[i], capsize=3, elinewidth=1.5, markersize=6, alpha=0.7)
 
-    plt.title(f"{exp_name} ({unit})")
-    plt.xlabel(f"Target Position ({unit})")
-    plt.ylabel(f"Response (Median) [{unit}]")
-    plt.legend()
-    plt.grid(True, linestyle=':')
+    limit = AXIS_LIMIT
+    _add_ideal_line(ax, limit)
+    _add_reference_lines(ax, exp_name, True, limit)
+    _set_10deg_grid(ax) 
+    
+    ax.set_aspect('equal', adjustable='box')
+    ax.set_xlim(-limit, limit)
+    ax.set_ylim(-limit, limit)
+    ax.set_xlabel(r'Target Angle ($^{\circ}$)')
+    ax.set_ylabel(r'Perceived Angle ($^{\circ}$)')
+    
+    handles, labels = ax.get_legend_handles_labels()
+    patch = mpatches.Patch(color='none', label='Dots: Median / Whiskers: IQR')
+    handles.append(patch)
+    
+    ax.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, -0.12), 
+              ncol=3, frameon=True, fontsize=9)
+    
     safe = "".join([c for c in exp_name if c.isalnum() or c in (' ', '_')]).strip().replace(" ", "_")
-    plt.savefig(os.path.join(folder, f"GRAPH_{safe}{suffix}.png"))
-    plt.close()
-
-def _plot_master_comparison(experiments, folder, use_deg=False):
-    plt.figure(figsize=(12, 8))
-    colors = plt.cm.Dark2(np.linspace(0, 1, len(experiments)))
-    has_data = False
-    suffix = "_DEG" if use_deg else ""
-    unit = "Degrees" if use_deg else "cm"
-
-    global_min, global_max = float('inf'), float('-inf')
-
-    for i, (exp_name, audio_groups) in enumerate(experiments.items()):
-        merged = defaultdict(list)
-        radius = _get_radius_for_exp(exp_name)
-        
-        for _, data_dict in audio_groups.items():
-            for t, r in data_dict.items(): merged[t].extend(r)
-        if not merged: continue
-        has_data = True
-        
-        targets = sorted(merged.keys())
-        x_vals = []
-        medians = [] 
-        
-        for t in targets:
-            responses = merged[t]
-            if use_deg:
-                x_val = _cm_to_deg(t, radius)
-                med_val = np.median([_cm_to_deg(r, radius) for r in responses])
-            else:
-                x_val = t
-                med_val = np.median(responses)
-            
-            x_vals.append(x_val)
-            medians.append(med_val)
-            global_min = min(global_min, x_val)
-            global_max = max(global_max, x_val)
-            
-        plt.plot(x_vals, medians, 'o-', linewidth=2, label=_shorten_name(exp_name), color=colors[i])
-
-    if has_data:
-        pad = 5 if use_deg else 25
-        plt.plot([global_min-pad, global_max+pad], [global_min-pad, global_max+pad], 'k--', alpha=0.3, label="Ideal")
-        
-        plt.title(f"MASTER: Position Comparison ({unit})")
-        plt.xlabel(f"Target Position ({unit})")
-        plt.ylabel(f"Response (Median) [{unit}]")
-        plt.legend()
-        plt.grid(True)
-        plt.savefig(os.path.join(folder, f"GRAPH_MASTER_POSITIONS{suffix}.png"))
+    plt.savefig(os.path.join(folder, f"GRAPH_{safe}_IQR.png"), dpi=300, bbox_inches='tight')
     plt.close()
 
 def _plot_method_comparison(experiments, folder, dim, k1, k2, use_deg=False):
     label_single = next((k for k in experiments.keys() if k1 in k), None)
     label_dual = next((k for k in experiments.keys() if k2 in k), None)
     if not label_single or not label_dual: return
+    if not use_deg: return
     
-    suffix = "_DEG" if use_deg else ""
-    unit = "Degrees" if use_deg else "cm"
+    fig, ax = plt.subplots(figsize=(7, 7))
     
-    plt.figure(figsize=(10, 6))
+    series_config = [
+        (label_single, '#1f77b4', 'Single', 'o'), 
+        (label_dual, '#ff7f0e', 'Dual', 's')
+    ]
     
-    all_x = []
-    
-    for label, color, tag in [(label_single, 'blue', 'Single'), (label_dual, 'red', 'Dual')]:
+    for label, color, tag, m in series_config:
         radius = _get_radius_for_exp(label)
         merged = defaultdict(list)
         for _, data_dict in experiments[label].items():
             for t, r in data_dict.items(): merged[t].extend(r)
-        if not merged: continue
         
         targets = sorted(merged.keys())
-        x_vals, medians, stds = [], [], []
+        x_vals, medians, err_low, err_high = [], [], [], []
         
         for t in targets:
-            responses = merged[t]
-            if use_deg:
-                x_val = _cm_to_deg(t, radius)
-                vals = [_cm_to_deg(r, radius) for r in responses]
-            else:
-                x_val = t
-                vals = responses
-                
-            x_vals.append(x_val)
-            medians.append(np.median(vals)) 
-            stds.append(np.std(vals))
-            all_x.append(x_val)
+            responses = [_cm_to_deg(r, radius) for r in merged[t]]
+            x_val = _cm_to_deg(t, radius)
+            q1 = np.percentile(responses, 25)
+            q3 = np.percentile(responses, 75)
+            med = np.median(responses)
             
-        plt.errorbar(x_vals, medians, yerr=stds, fmt='o-', capsize=5, label=tag, color=color)
+            x_vals.append(x_val) 
+            medians.append(med)
+            err_low.append(med - q1)
+            err_high.append(q3 - med)
+            
+        ax.errorbar(x_vals, medians, yerr=[err_low, err_high], fmt=m, capsize=4, label=tag, color=color, alpha=0.7)
 
-    if all_x:
-        min_x, max_x = min(all_x), max(all_x)
-        plt.plot([min_x, max_x], [min_x, max_x], 'k--', alpha=0.3, label="Ideal")
+    limit = AXIS_LIMIT
+    _add_ideal_line(ax, limit)
+    _add_reference_lines(ax, label_single, True, limit)
+    _set_10deg_grid(ax) 
+    
+    ax.set_aspect('equal', adjustable='box')
+    ax.set_xlim(-limit, limit)
+    ax.set_ylim(-limit, limit)
+    ax.set_xlabel(r'Target Angle ($^{\circ}$)')
+    ax.set_ylabel(r'Perceived Angle ($^{\circ}$)')
+    
+    handles, labels = ax.get_legend_handles_labels()
+    patch = mpatches.Patch(color='none', label='Dots: Median / Whiskers: IQR')
+    handles.append(patch)
+    ax.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, -0.12), 
+              ncol=3, frameon=True, fontsize=9)
+    
+    plt.savefig(os.path.join(folder, f"GRAPH_COMPARE_{dim.upper()}_IQR.png"), dpi=300, bbox_inches='tight')
+    plt.close()
 
-    ref_exp = label_dual if "Dual" in label_dual else label_single
-    _add_reference_lines(ref_exp, use_deg)
 
-    plt.title(f"COMPARE: {dim} ({unit})")
-    plt.xlabel(f"Target Position ({unit})")
-    plt.ylabel(f"Response (Median) [{unit}]")
-    plt.grid(True)
-    plt.legend()
-    plt.savefig(os.path.join(folder, f"GRAPH_COMPARE_{dim.upper()}{suffix}.png"))
+# ==============================================================================
+# 2. SPLINE TREND GRAPHS
+# ==============================================================================
+
+def _plot_multi_line_spline_trend(exp_name, audio_groups, folder):
+    fig, ax = plt.subplots(figsize=(7, 7))
+    radius = _get_radius_for_exp(exp_name)
+    colors = plt.cm.tab10(np.linspace(0, 1, max(len(audio_groups), 3)))
+
+    for i, (audio, data) in enumerate(audio_groups.items()):
+        targets = sorted(data.keys())
+        x_vals, medians, err_low, err_high = [], [], [], []
+        
+        for t in targets:
+            responses = [_cm_to_deg(r, radius) for r in data[t]]
+            x_val = _cm_to_deg(t, radius)
+            q1 = np.percentile(responses, 25)
+            q3 = np.percentile(responses, 75)
+            med = np.median(responses)
+            
+            x_vals.append(x_val)
+            medians.append(med)
+            err_low.append(med - q1)
+            err_high.append(q3 - med)
+
+        col = colors[i]
+        label = _shorten_name(os.path.basename(audio))
+        
+        if len(x_vals) > 3:
+            spline = UnivariateSpline(x_vals, medians, k=3, s=len(x_vals)*20) 
+            x_smooth = np.linspace(min(x_vals), max(x_vals), 100)
+            y_smooth = spline(x_smooth)
+            
+            residuals = np.array(medians) - spline(x_vals)
+            std_err = np.std(residuals)
+            ax.fill_between(x_smooth, y_smooth - std_err, y_smooth + std_err, color=col, alpha=0.2, linewidth=0)
+        else:
+             ax.plot(x_vals, medians, '-', color=col, linewidth=2, label=f"{label} (Linear)")
+
+        ax.errorbar(x_vals, medians, yerr=[err_low, err_high], fmt='o', color=col, alpha=0.7, markersize=4, capsize=2, label=label)
+
+    limit = AXIS_LIMIT
+    _add_ideal_line(ax, limit)
+    _add_reference_lines(ax, exp_name, True, limit)
+    _set_10deg_grid(ax) 
+    
+    ax.set_aspect('equal', adjustable='box')
+    ax.set_xlim(-limit, limit)
+    ax.set_ylim(-limit, limit)
+    ax.set_xlabel(r'Target Angle ($^{\circ}$)')
+    ax.set_ylabel(r'Perceived Angle ($^{\circ}$)')
+    
+    handles, labels = ax.get_legend_handles_labels()
+    patch = mpatches.Patch(color='gray', alpha=0.2, label='Curve: Spline Fit / Shade: Fit Error / Whiskers: IQR')
+    handles.append(patch)
+    ax.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, -0.12), 
+              ncol=2, frameon=True, fontsize=9)
+    
+    safe = "".join([c for c in exp_name if c.isalnum() or c in (' ', '_')]).strip().replace(" ", "_")
+    plt.savefig(os.path.join(folder, f"GRAPH_{safe}_Spline.png"), dpi=300, bbox_inches='tight')
+    plt.close()
+
+def _plot_method_comparison_spline(experiments, folder, dim, k1, k2):
+    label_single = next((k for k in experiments.keys() if k1 in k), None)
+    label_dual = next((k for k in experiments.keys() if k2 in k), None)
+    if not label_single or not label_dual: return
+    
+    fig, ax = plt.subplots(figsize=(7, 7))
+    all_vals = []
+    
+    series_config = [
+        (label_single, '#1f77b4', 'Single', 'o'), 
+        (label_dual, '#ff7f0e', 'Dual', 's')
+    ]
+    
+    for label, color, tag, m in series_config:
+        radius = _get_radius_for_exp(label)
+        merged = defaultdict(list)
+        for _, data_dict in experiments[label].items():
+            for t, r in data_dict.items(): merged[t].extend(r)
+        
+        targets = sorted(merged.keys())
+        x_vals, medians, err_low, err_high = [], [], [], []
+        
+        for t in targets:
+            responses = [_cm_to_deg(r, radius) for r in merged[t]]
+            x_val = _cm_to_deg(t, radius)
+            q1 = np.percentile(responses, 25)
+            q3 = np.percentile(responses, 75)
+            med = np.median(responses)
+            
+            x_vals.append(x_val)
+            medians.append(med)
+            err_low.append(med - q1)
+            err_high.append(q3 - med)
+            all_vals.extend(responses)
+            all_vals.append(x_val)
+            
+        if len(x_vals) > 3:
+            spline = UnivariateSpline(x_vals, medians, k=3, s=len(x_vals)*20)
+            x_smooth = np.linspace(min(x_vals), max(x_vals), 100)
+            y_smooth = spline(x_smooth)
+            
+            residuals = np.array(medians) - spline(x_vals)
+            std_err = np.std(residuals)
+            ax.fill_between(x_smooth, y_smooth - std_err, y_smooth + std_err, color=color, alpha=0.2, linewidth=0)
+        
+        ax.errorbar(x_vals, medians, yerr=[err_low, err_high], fmt=m, color=color, alpha=0.7, markersize=5, capsize=3, label=tag)
+
+    limit = AXIS_LIMIT
+    _add_ideal_line(ax, limit)
+    _add_reference_lines(ax, label_single, True, limit)
+    _set_10deg_grid(ax) 
+    
+    ax.set_aspect('equal', adjustable='box')
+    ax.set_xlim(-limit, limit)
+    ax.set_ylim(-limit, limit)
+    ax.set_xlabel(r'Target Angle ($^{\circ}$)')
+    ax.set_ylabel(r'Perceived Angle ($^{\circ}$)')
+    
+    handles, labels = ax.get_legend_handles_labels()
+    patch = mpatches.Patch(color='gray', alpha=0.2, label='Curve: Spline Fit / Shade: Fit Error / Whiskers: IQR')
+    handles.append(patch)
+    ax.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, -0.12), 
+              ncol=2, frameon=True, fontsize=9)
+    
+    plt.savefig(os.path.join(folder, f"GRAPH_COMPARE_{dim.upper()}_Spline.png"), dpi=300, bbox_inches='tight')
+    plt.close()
+
+
+# ==============================================================================
+# 3. MASTER COMPARISON & DOT CHARTS
+# ==============================================================================
+
+def _plot_master_comparison(experiments, folder, use_deg=False):
+    if not use_deg: return
+    fig, ax = plt.subplots(figsize=(7, 7))
+    colors = plt.cm.Set1(np.linspace(0, 1, max(len(experiments), 3)))
+
+    for i, (exp_name, audio_groups) in enumerate(experiments.items()):
+        merged = defaultdict(list)
+        radius = _get_radius_for_exp(exp_name)
+        for _, data_dict in audio_groups.items():
+            for t, r in data_dict.items(): merged[t].extend(r)
+        
+        targets = sorted(merged.keys())
+        x_vals, medians = [], []
+        for t in targets:
+            responses = merged[t]
+            x_val = _cm_to_deg(t, radius)
+            vals = [_cm_to_deg(r, radius) for r in responses]
+            x_vals.append(x_val)
+            medians.append(np.median(vals))
+            
+        ax.plot(x_vals, medians, 'o-', linewidth=2, label=_shorten_name(exp_name), color=colors[i], markersize=6)
+
+    limit = AXIS_LIMIT
+    _add_ideal_line(ax, limit)
+    # NO REFERENCE LINES
+    _set_10deg_grid(ax) 
+    
+    ax.set_aspect('equal', adjustable='box')
+    ax.set_xlim(-limit, limit)
+    ax.set_ylim(-limit, limit)
+    ax.set_xlabel(r'Target Angle ($^{\circ}$)')
+    ax.set_ylabel(r'Perceived Angle ($^{\circ}$)')
+    ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), 
+              ncol=3, frameon=True, fontsize=9)
+    plt.savefig(os.path.join(folder, "GRAPH_MASTER_POSITIONS.png"), dpi=300, bbox_inches='tight')
     plt.close()
 
 def _plot_master_absolute_error(raw_data, folder, use_deg=False):
-    if not raw_data: return
-    plt.figure(figsize=(12, 7))
+    if not raw_data or not use_deg: return
+    plt.figure(figsize=(10, 6))
     exp_names = sorted(raw_data.keys())
     means, sems, labels = [], [], []
-    suffix = "_DEG" if use_deg else ""
-    unit = "Degrees" if use_deg else "cm"
-    
     for exp in exp_names:
         radius = _get_radius_for_exp(exp)
-        errors = [d['abs_error'] for d in raw_data[exp]]
-        if use_deg:
-            errors = [_cm_to_deg(e, radius) for e in errors]
-            
+        errors = [_cm_to_deg(d['abs_error'], radius) for d in raw_data[exp]]
         if not errors: continue
         means.append(np.mean(errors)) 
         sems.append(np.std(errors) / np.sqrt(len(errors)))
         labels.append(_shorten_name(exp))
         
-    plt.bar(np.arange(len(labels)), means, yerr=sems, capsize=10, color='skyblue', alpha=0.7)
-    plt.xticks(np.arange(len(labels)), labels, rotation=15)
-    plt.title(f'MASTER: Mean Absolute Error ({unit})')
-    plt.ylabel(f"Error ({unit})")
-    plt.savefig(os.path.join(folder, f"GRAPH_MASTER_ERROR_ABSOLUTE{suffix}.png"))
+    bars = plt.bar(np.arange(len(labels)), means, yerr=sems, capsize=6, color='#5da5da', alpha=0.9)
+    plt.xticks(np.arange(len(labels)), labels, rotation=25, ha='right')
+    plt.ylabel(r'Mean Absolute Error ($^{\circ}$)')
+    plt.grid(axis='y', linestyle=':', alpha=0.5)
+    plt.legend([bars], ["Bar: Mean Error / Whiskers: SEM"], 
+               loc='upper center', bbox_to_anchor=(0.5, -0.15), 
+               ncol=1, frameon=True, fontsize=9)
+    plt.savefig(os.path.join(folder, "GRAPH_MASTER_ERROR_ABSOLUTE.png"), dpi=300, bbox_inches='tight')
     plt.close()
 
-def _plot_master_grouped_position_error(raw_data_flat, folder, use_deg=False):
-    if not raw_data_flat: return
+def _plot_master_grouped_position_error_lines(raw_data_flat, folder, use_deg=False):
+    if not raw_data_flat or not use_deg: return
     data_map = defaultdict(dict)
-    all_positions = set()
+    all_positions_deg = set()
     all_experiments = sorted(raw_data_flat.keys())
-    suffix = "_DEG" if use_deg else ""
-    unit = "Degrees" if use_deg else "cm"
     
     for exp_name in all_experiments:
         radius = _get_radius_for_exp(exp_name)
         pos_errors = defaultdict(list)
         for item in raw_data_flat[exp_name]:
-            val = item['abs_error']
-            if use_deg: val = _cm_to_deg(val, radius)
-            pos_errors[item['target']].append(val)
-            
+            val_deg = _cm_to_deg(item['abs_error'], radius)
+            tgt_deg = round(_cm_to_deg(item['target'], radius)) 
+            pos_errors[tgt_deg].append(val_deg)
         for pos, errors in pos_errors.items():
-            data_map[pos][exp_name] = np.median(errors) # MEDIAN
-            all_positions.add(pos)
+            data_map[pos][exp_name] = np.median(errors)
+            all_positions_deg.add(pos)
             
-    sorted_positions = sorted(list(all_positions))
+    sorted_positions = sorted(list(all_positions_deg))
     if not sorted_positions: return
     
-    plt.figure(figsize=(16, 8))
-    num_exps = len(all_experiments)
-    bar_width = 20.0 / num_exps
-    colors = plt.cm.tab10(np.linspace(0, 1, num_exps))
+    plt.figure(figsize=(7, 7))
+    colors = plt.cm.tab10(np.linspace(0, 1, len(all_experiments)))
     
-    if use_deg:
-        # NOTE: Grouped Bars use Index (CM) for grouping, labels in degrees?
-        # Mixing them is tricky. Let's keep X-Labels as CM for clarity of position.
-        xtick_labels = [int(p) for p in sorted_positions]
-        xlabel = "Target Position (cm) [Y is Degrees]"
-    else:
-        xtick_labels = [int(p) for p in sorted_positions]
-        xlabel = "Target Position (cm)"
-
     for i, exp_name in enumerate(all_experiments):
-        offset = (i - num_exps/2 + 0.5) * bar_width
-        x_vals = [p + offset for p in sorted_positions if exp_name in data_map[p]]
-        y_vals = [data_map[p][exp_name] for p in sorted_positions if exp_name in data_map[p]]
-        plt.bar(x_vals, y_vals, width=bar_width, label=_shorten_name(exp_name), color=colors[i], align='center', alpha=0.9, edgecolor='white')
+        x_vals, y_vals = [], []
+        for p in sorted_positions:
+            if exp_name in data_map[p]:
+                x_vals.append(p)
+                y_vals.append(data_map[p][exp_name])
+        # SCATTER PLOT ONLY (No lines)
+        plt.plot(x_vals, y_vals, marker='o', linestyle='None', label=_shorten_name(exp_name), color=colors[i], markersize=6, alpha=0.8)
         
-    plt.title(f"MASTER: Accuracy by Position ({unit})")
-    plt.xlabel(xlabel)
-    plt.ylabel(f"Median Abs Error ({unit})")
-    plt.xticks(sorted_positions, xtick_labels, rotation=45)
-    plt.xlim(min(sorted_positions)-25, max(sorted_positions)+25)
-    plt.grid(axis='y', linestyle='--', alpha=0.6)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(os.path.join(folder, f"GRAPH_MASTER_DETAILED_COMPARISON{suffix}.png"))
+    plt.xlabel(r'Target Angle ($^{\circ}$)')
+    plt.ylabel(r'Median Abs Error ($^{\circ}$)')
+    
+    ax = plt.gca()
+    _set_10deg_grid(ax)
+    ax.set_xlim(-AXIS_LIMIT, AXIS_LIMIT) 
+    
+    plt.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), 
+               ncol=3, frameon=True, fontsize=9)
+    plt.savefig(os.path.join(folder, "GRAPH_MASTER_DETAILED_LINES.png"), dpi=300, bbox_inches='tight')
     plt.close()
 
 def _plot_master_signed_error(raw_data, folder, use_deg=False):
-    if not raw_data: return
-    plt.figure(figsize=(12, 7))
+    if not raw_data or not use_deg: return
+    plt.figure(figsize=(10, 6))
     exp_names = sorted(raw_data.keys())
-    data = []
-    labels = []
-    suffix = "_DEG" if use_deg else ""
-    unit = "Degrees" if use_deg else "cm"
-    
+    data, labels = [], []
     for exp in exp_names:
         radius = _get_radius_for_exp(exp)
-        errors = [d['signed_error'] for d in raw_data[exp]]
-        if use_deg:
-            errors = [_cm_to_deg(e, radius) for e in errors]
-            
+        errors = [_cm_to_deg(d['signed_error'], radius) for d in raw_data[exp]]
         if not errors: continue
         data.append(errors)
         labels.append(_shorten_name(exp))
         
     plt.axhline(0, color='black')
-    plt.boxplot(data, labels=labels, patch_artist=True, boxprops=dict(facecolor="lightgreen"))
-    plt.xticks(rotation=15)
-    plt.ylabel(f"Signed Error ({unit})")
-    plt.title(f'MASTER: Bias Comparison ({unit})')
-    plt.savefig(os.path.join(folder, f"GRAPH_MASTER_ERROR_SIGNED{suffix}.png"))
+    bp = plt.boxplot(data, labels=labels, patch_artist=True, boxprops=dict(facecolor="#90EE90", color="black"))
+    plt.xticks(rotation=90) 
+    plt.ylabel(r'Signed Error ($^{\circ}$)')
+    plt.grid(axis='y', linestyle=':')
+    plt.legend([bp["boxes"][0]], ["Box: IQR / Line: Median"], 
+               loc='upper center', bbox_to_anchor=(0.5, -0.25), 
+               ncol=1, frameon=True, fontsize=9)
+    plt.savefig(os.path.join(folder, "GRAPH_MASTER_BIAS.png"), dpi=300, bbox_inches='tight')
     plt.close()
 
 def _plot_detailed_error_vs_position(exp_name, data_list, folder, use_deg=False):
+    if not use_deg: return
     grouped = defaultdict(list)
     radius = _get_radius_for_exp(exp_name)
-    suffix = "_DEG" if use_deg else ""
-    unit = "Degrees" if use_deg else "cm"
-    
     for item in data_list:
-        val = item['signed_error']
-        if use_deg: val = _cm_to_deg(val, radius)
-        grouped[item['target']].append(val)
+        val = _cm_to_deg(item['signed_error'], radius)
+        tgt = round(_cm_to_deg(item['target'], radius), 1)
+        grouped[tgt].append(val)
         
     targets = sorted(grouped.keys())
     if not targets: return
-    short = _shorten_name(exp_name)
-    safe = "".join([c for c in short if c.isalnum() or c in (' ', '_')]).strip().replace(" ", "_")
     
-    if use_deg:
-        # HERE IS THE FIX: Plot the boxes at DEGREE positions
-        plot_positions = [_cm_to_deg(t, radius) for t in targets]
-        xticklabels = [f"{p:.1f}°" for p in plot_positions]
-        xlabel = "Target (Degrees)"
-        # Reduce box width for Degree scale
-        box_width = 4 
-    else:
-        plot_positions = targets
-        xticklabels = [int(t) for t in targets]
-        xlabel = "Target (cm)"
-        box_width = 15
-
-    plt.figure(figsize=(14, 7))
-    plt.axhline(0, color='black')
-    plt.boxplot([grouped[t] for t in targets], positions=plot_positions, widths=box_width, showfliers=False)
+    plt.figure(figsize=(9, 5))
+    plt.axhline(0, color='black', linewidth=1)
     
-    _add_reference_lines(exp_name, use_deg)
+    # BOXPLOT
+    bp = plt.boxplot([grouped[t] for t in targets], positions=targets, widths=3, showfliers=False,
+                boxprops=dict(color='black'), medianprops=dict(color='red'))
+    plt.xlabel(r'Target Angle ($^{\circ}$)')
+    plt.ylabel(r'Signed Error ($^{\circ}$)')
     
-    plt.title(f"BIAS: {short} [{unit}]")
-    plt.xticks(plot_positions, xticklabels, rotation=45)
-    plt.xlabel(xlabel)
-    plt.ylabel(f"Error ({unit})")
-    plt.grid(True, linestyle=':')
-    plt.savefig(os.path.join(folder, f"GRAPH_DETAIL_SIGNED_{safe}{suffix}.png"))
+    ax = plt.gca()
+    _set_10deg_grid(ax)
+    
+    # FIXED LIMITS
+    ax.set_xlim(-AXIS_LIMIT, AXIS_LIMIT)
+    ax.set_ylim(-AXIS_LIMIT, AXIS_LIMIT) # 1:1 Scale
+    
+    plt.legend([bp["boxes"][0]], ["Box: IQR / Line: Median"], 
+               loc='upper center', bbox_to_anchor=(0.5, -0.2), 
+               ncol=1, frameon=True, fontsize=9)
+    
+    _add_reference_lines(plt.gca(), exp_name, True, AXIS_LIMIT)
+    
+    safe = "".join([c for c in _shorten_name(exp_name) if c.isalnum() or c in (' ', '_')]).strip().replace(" ", "_")
+    plt.tight_layout()
+    plt.savefig(os.path.join(folder, f"GRAPH_DETAIL_BIAS_{safe}.png"), dpi=300, bbox_inches='tight')
     plt.close()
 
 def _generate_leaderboard_file(participant_scores, folder):
