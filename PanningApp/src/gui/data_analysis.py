@@ -13,11 +13,12 @@ plt.rcParams.update({
     'font.size': 11,
     'axes.labelsize': 12,
     'axes.titlesize': 13,
+    'axes.titleweight': 'bold',
     'xtick.labelsize': 10,
     'ytick.labelsize': 10,
     'legend.fontsize': 9,
     'lines.linewidth': 2.0,
-    'figure.figsize': (8, 8),
+    'figure.figsize': (7, 7), 
     'figure.autolayout': True
 })
 
@@ -35,7 +36,6 @@ RADII = {
 }
 
 # --- GLOBAL AXIS LIMITS (For Comparability) ---
-# We lock both X and Y axes to +/- 75 degrees to keep scales 1:1
 AXIS_LIMIT = 75.0 
 
 def generate_aggregated_plots(data_folder_name="experiment_data"):
@@ -111,14 +111,19 @@ def generate_aggregated_plots(data_folder_name="experiment_data"):
         _plot_multi_line_experiment(exp_label, audio_groups, data_folder, use_deg=True)
 
     _plot_master_comparison(experiments, data_folder, use_deg=True)
+    
+    # === COMPARISON GRAPHS (IQR) ===
+    _plot_method_comparison(experiments, data_folder, "Azimuth", "0. Azimuth", "1. Azimuth", use_deg=True) 
     _plot_method_comparison(experiments, data_folder, "Distance", "2. Distance Single", "3. Distance Dual", use_deg=True)
     _plot_method_comparison(experiments, data_folder, "Elevation", "4. Elevation Single", "5. Elevation Dual", use_deg=True)
     
-    # 2. Spline Trend Graphs
+    # 2. Spline Trend Graphs (Shaded IQR ONLY)
     print("Generating Reactive Spline Graphs...")
     for exp_label, audio_groups in experiments.items():
         _plot_multi_line_spline_trend(exp_label, audio_groups, data_folder)
-        
+    
+    # === COMPARISON GRAPHS (SPLINE) ===
+    _plot_method_comparison_spline(experiments, data_folder, "Azimuth", "0. Azimuth", "1. Azimuth")
     _plot_method_comparison_spline(experiments, data_folder, "Distance", "2. Distance Single", "3. Distance Dual")
     _plot_method_comparison_spline(experiments, data_folder, "Elevation", "4. Elevation Single", "5. Elevation Dual")
 
@@ -127,7 +132,8 @@ def generate_aggregated_plots(data_folder_name="experiment_data"):
     _plot_master_grouped_position_error_lines(raw_data_flat, data_folder, use_deg=True)
     _plot_master_signed_error(raw_data_flat, data_folder, use_deg=True)
 
-    for exp_label in raw_data_flat.keys():
+    # 4. Individual Boxplots (Target vs Response)
+    for exp_label in sorted(raw_data_flat.keys()):
         _plot_detailed_error_vs_position(exp_label, raw_data_flat[exp_label], data_folder, use_deg=True)
 
     # --- REPORTS ---
@@ -140,70 +146,79 @@ def generate_aggregated_plots(data_folder_name="experiment_data"):
 # HELPERS
 # ==============================================================================
 def _get_radius_for_exp(exp_name):
-    if "Azimuth" in exp_name: return RADII["Azimuth"]
+    if "Azimuth" in exp_name or "Previous" in exp_name: return RADII["Azimuth"]
     if "Elevation" in exp_name: return RADII["Elevation"]
     if "Distance" in exp_name: return RADII["Distance"]
     return 200.0 
 
 def _cm_to_deg(cm_val, radius):
+    if radius == 0: return 0
     return np.degrees(np.arctan(cm_val / radius))
 
 def _shorten_name(exp_name):
-    if str(exp_name).lower().endswith('.wav'):
-        return str(exp_name)[:-4]
-    if '.' in exp_name:
-        parts = exp_name.split('.')
+    name = str(exp_name).strip()
+    if name.lower().endswith('.wav'): name = name[:-4]
+    
+    if "0. Azimuth" in name or name == "Previous": return "Azimuth Single"
+    if "1. Azimuth" in name: return "Azimuth Dual"
+    if "2. Distance Single" in name: return "Distance Single"
+    if "3. Distance Dual" in name: return "Distance Dual"
+    if "4. Elevation Single" in name: return "Elevation Single"
+    if "5. Elevation Dual" in name: return "Elevation Dual"
+    
+    if '.' in name:
+        parts = name.split('.')
         if len(parts) > 1: return parts[1].split('(')[0].strip()
-    return exp_name
-
-def _calculate_dynamic_limits(values, padding_percent=0.15):
-    return AXIS_LIMIT
+    return name
 
 def _add_ideal_line(ax, limit):
-    ax.plot([-limit, limit], [-limit, limit], color='gray', linestyle='--', linewidth=1, label='Ideal (y=x)', zorder=0)
+    ax.plot([-limit, limit], [-limit, limit], color='gray', linestyle='--', linewidth=1, label='Target', zorder=0)
 
 def _add_reference_lines(ax, exp_name, use_deg, y_limit):
-    radius = _get_radius_for_exp(exp_name)
+    ax.axvline(0, color='black', linewidth=1, alpha=0.3, zorder=0)
+    
     speakers, boundaries = [], []
     spk_labels, bnd_labels = [], []
     
     if "Elevation" in exp_name:
-        speakers = [-92.5, 92.5]
+        val_deg = _cm_to_deg(92.5, RADII["Elevation"])
+        speakers = [-val_deg, val_deg]
         spk_labels = ["Floor LS", "Ceiling LS"]
-        boundaries = [-127.5, 137.5]
+        boundaries = [_cm_to_deg(-127.5, RADII["Elevation"]), _cm_to_deg(137.5, RADII["Elevation"])]
         bnd_labels = ["Floor", "Ceiling"]
-    elif "Azimuth" in exp_name:
-        speakers = [-122.5, 122.5]
+        
+    elif "Azimuth" in exp_name or "Previous" in exp_name:
+        speakers = [-30.0, 30.0]
         spk_labels = ["Left LS", "Right LS"]
+        
     elif "Distance" in exp_name:
-        speakers = [-122.5, 122.5]
+        val_deg = _cm_to_deg(122.5, RADII["Distance"])
+        speakers = [-val_deg, val_deg]
         spk_labels = ["Rear LS", "Front LS"]
         if "Dual" in exp_name:
-            boundaries = [-122.5]
+            boundaries = [-val_deg]
             bnd_labels = ["Rear Wall"]
     else:
         return
 
     for i, pos in enumerate(speakers):
-        val = _cm_to_deg(pos, radius) if use_deg else pos
-        if abs(val) > y_limit: continue
-        ax.axvline(x=val, color='gray', linestyle='--', alpha=0.5, linewidth=1.5, zorder=0)
+        if abs(pos) > y_limit: continue
+        ax.axvline(x=pos, color='gray', linestyle='--', alpha=0.5, linewidth=1.5, zorder=0)
         label = spk_labels[i] if i < len(spk_labels) else "LS"
-        ax.text(val, y_limit*0.95, label, rotation=90, verticalalignment='top', 
+        ax.text(pos, y_limit*0.95, label, rotation=90, verticalalignment='top', 
                 color='gray', fontsize=8, ha='right')
 
     for i, pos in enumerate(boundaries):
-        val = _cm_to_deg(pos, radius) if use_deg else pos
-        if abs(val) > y_limit: continue
-        ax.axvline(x=val, color='red', linestyle=':', alpha=0.6, linewidth=1.5, zorder=0)
+        if abs(pos) > y_limit: continue
+        ax.axvline(x=pos, color='red', linestyle=':', alpha=0.6, linewidth=1.5, zorder=0)
         label = bnd_labels[i] if i < len(bnd_labels) else "Wall"
-        ax.text(val, -y_limit*0.95, label, rotation=90, verticalalignment='bottom', 
+        ax.text(pos, -y_limit*0.95, label, rotation=90, verticalalignment='bottom', 
                 color='red', fontsize=8, ha='right')
 
 def _set_10deg_grid(ax):
-    """Applies a 10-degree dotted grid."""
-    ax.xaxis.set_major_locator(MultipleLocator(10))
-    ax.yaxis.set_major_locator(MultipleLocator(10))
+    ticks = np.arange(-80, 90, 10)
+    ax.set_xticks(ticks)
+    ax.set_yticks(ticks)
     ax.grid(True, linestyle=':', alpha=0.6)
 
 # ==============================================================================
@@ -233,7 +248,7 @@ def _plot_multi_line_experiment(exp_name, audio_groups, folder, use_deg=False):
             err_high.append(q3 - med)
         
         ax.errorbar(x_vals, medians, yerr=[err_low, err_high], fmt='o-', 
-                    label=_shorten_name(os.path.basename(audio)), 
+                    label="Response", 
                     color=colors[i], capsize=3, elinewidth=1.5, markersize=6, alpha=0.7)
 
     limit = AXIS_LIMIT
@@ -241,6 +256,7 @@ def _plot_multi_line_experiment(exp_name, audio_groups, folder, use_deg=False):
     _add_reference_lines(ax, exp_name, True, limit)
     _set_10deg_grid(ax) 
     
+    ax.set_title(f"{_shorten_name(exp_name)} - Response Analysis")
     ax.set_aspect('equal', adjustable='box')
     ax.set_xlim(-limit, limit)
     ax.set_ylim(-limit, limit)
@@ -248,7 +264,7 @@ def _plot_multi_line_experiment(exp_name, audio_groups, folder, use_deg=False):
     ax.set_ylabel(r'Perceived Angle ($^{\circ}$)')
     
     handles, labels = ax.get_legend_handles_labels()
-    patch = mpatches.Patch(color='none', label='Dots: Median / Whiskers: IQR')
+    patch = mpatches.Patch(color='none', label='Dot: Median | Whiskers: 25th-75th Pct (IQR)')
     handles.append(patch)
     
     ax.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, -0.12), 
@@ -299,6 +315,7 @@ def _plot_method_comparison(experiments, folder, dim, k1, k2, use_deg=False):
     _add_reference_lines(ax, label_single, True, limit)
     _set_10deg_grid(ax) 
     
+    ax.set_title(f"{dim} Experiments Compared (IQR)")
     ax.set_aspect('equal', adjustable='box')
     ax.set_xlim(-limit, limit)
     ax.set_ylim(-limit, limit)
@@ -306,7 +323,7 @@ def _plot_method_comparison(experiments, folder, dim, k1, k2, use_deg=False):
     ax.set_ylabel(r'Perceived Angle ($^{\circ}$)')
     
     handles, labels = ax.get_legend_handles_labels()
-    patch = mpatches.Patch(color='none', label='Dots: Median / Whiskers: IQR')
+    patch = mpatches.Patch(color='none', label='Dot: Median | Whiskers: 25th-75th Pct (IQR)')
     handles.append(patch)
     ax.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, -0.12), 
               ncol=3, frameon=True, fontsize=9)
@@ -316,7 +333,7 @@ def _plot_method_comparison(experiments, folder, dim, k1, k2, use_deg=False):
 
 
 # ==============================================================================
-# 2. SPLINE TREND GRAPHS
+# 2. SPLINE TREND GRAPHS (NO MEDIAN SPLINE)
 # ==============================================================================
 
 def _plot_multi_line_spline_trend(exp_name, audio_groups, folder):
@@ -326,7 +343,8 @@ def _plot_multi_line_spline_trend(exp_name, audio_groups, folder):
 
     for i, (audio, data) in enumerate(audio_groups.items()):
         targets = sorted(data.keys())
-        x_vals, medians, err_low, err_high = [], [], [], []
+        x_vals, medians, q1_vals, q3_vals = [], [], [], []
+        err_low, err_high = [], []
         
         for t in targets:
             responses = [_cm_to_deg(r, radius) for r in data[t]]
@@ -337,30 +355,35 @@ def _plot_multi_line_spline_trend(exp_name, audio_groups, folder):
             
             x_vals.append(x_val)
             medians.append(med)
+            q1_vals.append(q1)
+            q3_vals.append(q3)
             err_low.append(med - q1)
             err_high.append(q3 - med)
 
         col = colors[i]
-        label = _shorten_name(os.path.basename(audio))
         
         if len(x_vals) > 3:
-            spline = UnivariateSpline(x_vals, medians, k=3, s=len(x_vals)*20) 
-            x_smooth = np.linspace(min(x_vals), max(x_vals), 100)
-            y_smooth = spline(x_smooth)
+            s_factor = len(x_vals) * 1000 
             
-            residuals = np.array(medians) - spline(x_vals)
-            std_err = np.std(residuals)
-            ax.fill_between(x_smooth, y_smooth - std_err, y_smooth + std_err, color=col, alpha=0.2, linewidth=0)
-        else:
-             ax.plot(x_vals, medians, '-', color=col, linewidth=2, label=f"{label} (Linear)")
+            spline_q1 = UnivariateSpline(x_vals, q1_vals, k=3, s=s_factor)
+            spline_q3 = UnivariateSpline(x_vals, q3_vals, k=3, s=s_factor)
+            
+            x_smooth = np.linspace(min(x_vals), max(x_vals), 100)
+            y_smooth_q1 = spline_q1(x_smooth)
+            y_smooth_q3 = spline_q3(x_smooth)
+            
+            # Shade ONLY the IQR band
+            ax.fill_between(x_smooth, y_smooth_q1, y_smooth_q3, color=col, alpha=0.15, linewidth=0)
 
-        ax.errorbar(x_vals, medians, yerr=[err_low, err_high], fmt='o', color=col, alpha=0.7, markersize=4, capsize=2, label=label)
+        # Plot raw dots and whiskers behind it for reference
+        ax.errorbar(x_vals, medians, yerr=[err_low, err_high], fmt='o', color=col, alpha=0.5, markersize=4, capsize=2, label="Response")
 
     limit = AXIS_LIMIT
     _add_ideal_line(ax, limit)
     _add_reference_lines(ax, exp_name, True, limit)
     _set_10deg_grid(ax) 
     
+    ax.set_title(f"{_shorten_name(exp_name)} - Trend Analysis (Spline)")
     ax.set_aspect('equal', adjustable='box')
     ax.set_xlim(-limit, limit)
     ax.set_ylim(-limit, limit)
@@ -368,7 +391,7 @@ def _plot_multi_line_spline_trend(exp_name, audio_groups, folder):
     ax.set_ylabel(r'Perceived Angle ($^{\circ}$)')
     
     handles, labels = ax.get_legend_handles_labels()
-    patch = mpatches.Patch(color='gray', alpha=0.2, label='Curve: Spline Fit / Shade: Fit Error / Whiskers: IQR')
+    patch = mpatches.Patch(color='gray', alpha=0.2, label='Shade: Smoothed IQR Band | Dot: Median | Whiskers: 25th-75th Pct')
     handles.append(patch)
     ax.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, -0.12), 
               ncol=2, frameon=True, fontsize=9)
@@ -383,7 +406,6 @@ def _plot_method_comparison_spline(experiments, folder, dim, k1, k2):
     if not label_single or not label_dual: return
     
     fig, ax = plt.subplots(figsize=(7, 7))
-    all_vals = []
     
     series_config = [
         (label_single, '#1f77b4', 'Single', 'o'), 
@@ -397,7 +419,8 @@ def _plot_method_comparison_spline(experiments, folder, dim, k1, k2):
             for t, r in data_dict.items(): merged[t].extend(r)
         
         targets = sorted(merged.keys())
-        x_vals, medians, err_low, err_high = [], [], [], []
+        x_vals, medians, q1_vals, q3_vals = [], [], [], []
+        err_low, err_high = [], []
         
         for t in targets:
             responses = [_cm_to_deg(r, radius) for r in merged[t]]
@@ -408,27 +431,31 @@ def _plot_method_comparison_spline(experiments, folder, dim, k1, k2):
             
             x_vals.append(x_val)
             medians.append(med)
+            q1_vals.append(q1)
+            q3_vals.append(q3)
             err_low.append(med - q1)
             err_high.append(q3 - med)
-            all_vals.extend(responses)
-            all_vals.append(x_val)
             
         if len(x_vals) > 3:
-            spline = UnivariateSpline(x_vals, medians, k=3, s=len(x_vals)*20)
-            x_smooth = np.linspace(min(x_vals), max(x_vals), 100)
-            y_smooth = spline(x_smooth)
+            s_factor = len(x_vals) * 1000
             
-            residuals = np.array(medians) - spline(x_vals)
-            std_err = np.std(residuals)
-            ax.fill_between(x_smooth, y_smooth - std_err, y_smooth + std_err, color=color, alpha=0.2, linewidth=0)
+            spline_q1 = UnivariateSpline(x_vals, q1_vals, k=3, s=s_factor)
+            spline_q3 = UnivariateSpline(x_vals, q3_vals, k=3, s=s_factor)
+            
+            x_smooth = np.linspace(min(x_vals), max(x_vals), 100)
+            y_smooth_q1 = spline_q1(x_smooth)
+            y_smooth_q3 = spline_q3(x_smooth)
+            
+            ax.fill_between(x_smooth, y_smooth_q1, y_smooth_q3, color=color, alpha=0.15, linewidth=0)
         
-        ax.errorbar(x_vals, medians, yerr=[err_low, err_high], fmt=m, color=color, alpha=0.7, markersize=5, capsize=3, label=tag)
+        ax.errorbar(x_vals, medians, yerr=[err_low, err_high], fmt=m, color=color, alpha=0.5, markersize=5, capsize=3, label=tag)
 
     limit = AXIS_LIMIT
     _add_ideal_line(ax, limit)
     _add_reference_lines(ax, label_single, True, limit)
     _set_10deg_grid(ax) 
     
+    ax.set_title(f"{dim} Experiments Compared (Spline)")
     ax.set_aspect('equal', adjustable='box')
     ax.set_xlim(-limit, limit)
     ax.set_ylim(-limit, limit)
@@ -436,7 +463,7 @@ def _plot_method_comparison_spline(experiments, folder, dim, k1, k2):
     ax.set_ylabel(r'Perceived Angle ($^{\circ}$)')
     
     handles, labels = ax.get_legend_handles_labels()
-    patch = mpatches.Patch(color='gray', alpha=0.2, label='Curve: Spline Fit / Shade: Fit Error / Whiskers: IQR')
+    patch = mpatches.Patch(color='gray', alpha=0.2, label='Shade: Smoothed IQR Band | Dot: Median | Whiskers: 25th-75th Pct')
     handles.append(patch)
     ax.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, -0.12), 
               ncol=2, frameon=True, fontsize=9)
@@ -452,9 +479,12 @@ def _plot_method_comparison_spline(experiments, folder, dim, k1, k2):
 def _plot_master_comparison(experiments, folder, use_deg=False):
     if not use_deg: return
     fig, ax = plt.subplots(figsize=(7, 7))
-    colors = plt.cm.Set1(np.linspace(0, 1, max(len(experiments), 3)))
+    
+    sorted_exps = sorted(experiments.keys())
+    colors = plt.cm.tab10(np.linspace(0, 1, len(sorted_exps)))
 
-    for i, (exp_name, audio_groups) in enumerate(experiments.items()):
+    for i, exp_name in enumerate(sorted_exps):
+        audio_groups = experiments[exp_name]
         merged = defaultdict(list)
         radius = _get_radius_for_exp(exp_name)
         for _, data_dict in audio_groups.items():
@@ -473,9 +503,9 @@ def _plot_master_comparison(experiments, folder, use_deg=False):
 
     limit = AXIS_LIMIT
     _add_ideal_line(ax, limit)
-    # NO REFERENCE LINES
     _set_10deg_grid(ax) 
     
+    ax.set_title("Master Accuracy Comparison")
     ax.set_aspect('equal', adjustable='box')
     ax.set_xlim(-limit, limit)
     ax.set_ylim(-limit, limit)
@@ -489,7 +519,8 @@ def _plot_master_comparison(experiments, folder, use_deg=False):
 def _plot_master_absolute_error(raw_data, folder, use_deg=False):
     if not raw_data or not use_deg: return
     plt.figure(figsize=(10, 6))
-    exp_names = sorted(raw_data.keys())
+    
+    exp_names = sorted(raw_data.keys()) 
     means, sems, labels = [], [], []
     for exp in exp_names:
         radius = _get_radius_for_exp(exp)
@@ -501,9 +532,11 @@ def _plot_master_absolute_error(raw_data, folder, use_deg=False):
         
     bars = plt.bar(np.arange(len(labels)), means, yerr=sems, capsize=6, color='#5da5da', alpha=0.9)
     plt.xticks(np.arange(len(labels)), labels, rotation=25, ha='right')
+    
+    plt.title("Overall Mean Absolute Error")
     plt.ylabel(r'Mean Absolute Error ($^{\circ}$)')
     plt.grid(axis='y', linestyle=':', alpha=0.5)
-    plt.legend([bars], ["Bar: Mean Error / Whiskers: SEM"], 
+    plt.legend([bars], ["Bar: Mean Error | Whiskers: Std Error of Mean (SEM)"], 
                loc='upper center', bbox_to_anchor=(0.5, -0.15), 
                ncol=1, frameon=True, fontsize=9)
     plt.savefig(os.path.join(folder, "GRAPH_MASTER_ERROR_ABSOLUTE.png"), dpi=300, bbox_inches='tight')
@@ -538,12 +571,12 @@ def _plot_master_grouped_position_error_lines(raw_data_flat, folder, use_deg=Fal
             if exp_name in data_map[p]:
                 x_vals.append(p)
                 y_vals.append(data_map[p][exp_name])
-        # SCATTER PLOT ONLY (No lines)
-        plt.plot(x_vals, y_vals, marker='o', linestyle='None', label=_shorten_name(exp_name), color=colors[i], markersize=6, alpha=0.8)
+        plt.plot(x_vals, y_vals, marker='o', linestyle='-', label=_shorten_name(exp_name), color=colors[i], markersize=6, alpha=0.8)
         
     plt.xlabel(r'Target Angle ($^{\circ}$)')
     plt.ylabel(r'Median Abs Error ($^{\circ}$)')
     
+    plt.title("Detailed Error Analysis by Position")
     ax = plt.gca()
     _set_10deg_grid(ax)
     ax.set_xlim(-AXIS_LIMIT, AXIS_LIMIT) 
@@ -564,55 +597,75 @@ def _plot_master_signed_error(raw_data, folder, use_deg=False):
         if not errors: continue
         data.append(errors)
         labels.append(_shorten_name(exp))
+    
+    # Alternating Blue/Orange colors
+    colors = ['#1f77b4', '#ff7f0e'] * (len(exp_names) // 2 + 1)
+    
+    ax = plt.gca()
+    ax.axhline(0, color='black', linewidth=1)
+    
+    bp = ax.boxplot(data, labels=labels, patch_artist=True, boxprops=dict(facecolor="white", color="black"))
+    for patch, color in zip(bp['boxes'], colors):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.6)
         
-    plt.axhline(0, color='black')
-    bp = plt.boxplot(data, labels=labels, patch_artist=True, boxprops=dict(facecolor="#90EE90", color="black"))
-    plt.xticks(rotation=90) 
-    plt.ylabel(r'Signed Error ($^{\circ}$)')
-    plt.grid(axis='y', linestyle=':')
-    plt.legend([bp["boxes"][0]], ["Box: IQR / Line: Median"], 
-               loc='upper center', bbox_to_anchor=(0.5, -0.25), 
+    ax.set_xticklabels(labels, rotation=45, ha='right') 
+    ax.set_ylabel(r'Signed Error ($^{\circ}$)')
+    ax.set_title("Bias Distribution (Signed Error)")
+    
+    # Finer 10-degree grid horizontally
+    ax.yaxis.set_major_locator(MultipleLocator(10))
+    ax.grid(axis='y', linestyle=':', alpha=0.6)
+    
+    h_b = mpatches.Patch(color='#1f77b4', label='Single Speaker', alpha=0.6)
+    h_o = mpatches.Patch(color='#ff7f0e', label='Dual Mono', alpha=0.6)
+    h_box = mpatches.Patch(color='white', ec='black', label='Box: 25th-75th Pct (IQR) | Line: Median | Whiskers: 1.5x IQR')
+    
+    ax.legend(handles=[h_b, h_o, h_box], loc='upper center', bbox_to_anchor=(0.5, -0.25), 
                ncol=1, frameon=True, fontsize=9)
     plt.savefig(os.path.join(folder, "GRAPH_MASTER_BIAS.png"), dpi=300, bbox_inches='tight')
     plt.close()
 
 def _plot_detailed_error_vs_position(exp_name, data_list, folder, use_deg=False):
     if not use_deg: return
+    
     grouped = defaultdict(list)
     radius = _get_radius_for_exp(exp_name)
     for item in data_list:
-        val = _cm_to_deg(item['signed_error'], radius)
+        resp = _cm_to_deg(item['response'], radius)
         tgt = round(_cm_to_deg(item['target'], radius), 1)
-        grouped[tgt].append(val)
+        grouped[tgt].append(resp)
         
     targets = sorted(grouped.keys())
     if not targets: return
     
-    plt.figure(figsize=(9, 5))
-    plt.axhline(0, color='black', linewidth=1)
+    fig, ax = plt.subplots(figsize=(7, 7))
     
-    # BOXPLOT
-    bp = plt.boxplot([grouped[t] for t in targets], positions=targets, widths=3, showfliers=False,
+    bp = ax.boxplot([grouped[t] for t in targets], positions=targets, widths=1.2, showfliers=True,
                 boxprops=dict(color='black'), medianprops=dict(color='red'))
-    plt.xlabel(r'Target Angle ($^{\circ}$)')
-    plt.ylabel(r'Signed Error ($^{\circ}$)')
     
-    ax = plt.gca()
+    _add_ideal_line(ax, AXIS_LIMIT)
+    _add_reference_lines(ax, exp_name, True, AXIS_LIMIT)
     _set_10deg_grid(ax)
     
-    # FIXED LIMITS
+    ax.set_title(f"{_shorten_name(exp_name)} - Response Boxplots")
+    ax.set_xlabel(r'Target Angle ($^{\circ}$)')
+    ax.set_ylabel(r'Perceived Angle ($^{\circ}$)')
+    
+    ax.set_aspect('equal', adjustable='box')
     ax.set_xlim(-AXIS_LIMIT, AXIS_LIMIT)
-    ax.set_ylim(-AXIS_LIMIT, AXIS_LIMIT) # 1:1 Scale
+    ax.set_ylim(-AXIS_LIMIT, AXIS_LIMIT) 
     
-    plt.legend([bp["boxes"][0]], ["Box: IQR / Line: Median"], 
-               loc='upper center', bbox_to_anchor=(0.5, -0.2), 
+    handles, labels = ax.get_legend_handles_labels()
+    patch = mpatches.Patch(color='white', ec='black', label='Box: 25th-75th Pct (IQR) | Line: Median | Whiskers: 1.5x IQR')
+    handles.append(patch)
+    
+    ax.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, -0.12), 
                ncol=1, frameon=True, fontsize=9)
-    
-    _add_reference_lines(plt.gca(), exp_name, True, AXIS_LIMIT)
     
     safe = "".join([c for c in _shorten_name(exp_name) if c.isalnum() or c in (' ', '_')]).strip().replace(" ", "_")
     plt.tight_layout()
-    plt.savefig(os.path.join(folder, f"GRAPH_DETAIL_BIAS_{safe}.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(folder, f"GRAPH_DETAIL_BOXPLOT_{safe}.png"), dpi=300, bbox_inches='tight')
     plt.close()
 
 def _generate_leaderboard_file(participant_scores, folder):
