@@ -117,7 +117,7 @@ def generate_aggregated_plots(data_folder_name="experiment_data"):
     _plot_method_comparison(experiments, data_folder, "Distance", "2. Distance Single", "3. Distance Dual", use_deg=True)
     _plot_method_comparison(experiments, data_folder, "Elevation", "4. Elevation Single", "5. Elevation Dual", use_deg=True)
     
-    # 2. Spline Trend Graphs (Shaded IQR ONLY)
+    # 2. Spline Trend Graphs (Shaded STD DEV ONLY)
     print("Generating Reactive Spline Graphs...")
     for exp_label, audio_groups in experiments.items():
         _plot_multi_line_spline_trend(exp_label, audio_groups, data_folder)
@@ -260,8 +260,8 @@ def _plot_multi_line_experiment(exp_name, audio_groups, folder, use_deg=False):
     ax.set_aspect('equal', adjustable='box')
     ax.set_xlim(-limit, limit)
     ax.set_ylim(-limit, limit)
-    ax.set_xlabel(r'Target Angle ($^{\circ}$)')
-    ax.set_ylabel(r'Perceived Angle ($^{\circ}$)')
+    ax.set_xlabel(r'Target Angle (DEG)')
+    ax.set_ylabel(r'Perceived Angle (DEG)')
     
     handles, labels = ax.get_legend_handles_labels()
     patch = mpatches.Patch(color='none', label='Dot: Median | Whiskers: 25th-75th Pct (IQR)')
@@ -319,8 +319,8 @@ def _plot_method_comparison(experiments, folder, dim, k1, k2, use_deg=False):
     ax.set_aspect('equal', adjustable='box')
     ax.set_xlim(-limit, limit)
     ax.set_ylim(-limit, limit)
-    ax.set_xlabel(r'Target Angle ($^{\circ}$)')
-    ax.set_ylabel(r'Perceived Angle ($^{\circ}$)')
+    ax.set_xlabel(r'Target Angle (DEG)')
+    ax.set_ylabel(r'Perceived Angle (DEG)')
     
     handles, labels = ax.get_legend_handles_labels()
     patch = mpatches.Patch(color='none', label='Dot: Median | Whiskers: 25th-75th Pct (IQR)')
@@ -333,7 +333,7 @@ def _plot_method_comparison(experiments, folder, dim, k1, k2, use_deg=False):
 
 
 # ==============================================================================
-# 2. SPLINE TREND GRAPHS (NO MEDIAN SPLINE)
+# 2. SPLINE TREND GRAPHS (BASED ON STANDARD DEVIATION)
 # ==============================================================================
 
 def _plot_multi_line_spline_trend(exp_name, audio_groups, folder):
@@ -343,37 +343,38 @@ def _plot_multi_line_spline_trend(exp_name, audio_groups, folder):
 
     for i, (audio, data) in enumerate(audio_groups.items()):
         targets = sorted(data.keys())
-        x_vals, medians, q1_vals, q3_vals = [], [], [], []
+        x_vals, medians, lower_vals, upper_vals = [], [], [], []
         err_low, err_high = [], []
         
         for t in targets:
             responses = [_cm_to_deg(r, radius) for r in data[t]]
             x_val = _cm_to_deg(t, radius)
-            q1 = np.percentile(responses, 25)
-            q3 = np.percentile(responses, 75)
+            
             med = np.median(responses)
+            # Calculate Standard Deviation (ddof=1 for sample data)
+            std = np.std(responses, ddof=1) if len(responses) > 1 else 0.0
             
             x_vals.append(x_val)
             medians.append(med)
-            q1_vals.append(q1)
-            q3_vals.append(q3)
-            err_low.append(med - q1)
-            err_high.append(q3 - med)
+            lower_vals.append(med - std)
+            upper_vals.append(med + std)
+            err_low.append(std)
+            err_high.append(std)
 
         col = colors[i]
         
         if len(x_vals) > 3:
             s_factor = len(x_vals) * 1000 
             
-            spline_q1 = UnivariateSpline(x_vals, q1_vals, k=3, s=s_factor)
-            spline_q3 = UnivariateSpline(x_vals, q3_vals, k=3, s=s_factor)
+            spline_lower = UnivariateSpline(x_vals, lower_vals, k=3, s=s_factor)
+            spline_upper = UnivariateSpline(x_vals, upper_vals, k=3, s=s_factor)
             
             x_smooth = np.linspace(min(x_vals), max(x_vals), 100)
-            y_smooth_q1 = spline_q1(x_smooth)
-            y_smooth_q3 = spline_q3(x_smooth)
+            y_smooth_lower = spline_lower(x_smooth)
+            y_smooth_upper = spline_upper(x_smooth)
             
-            # Shade ONLY the IQR band
-            ax.fill_between(x_smooth, y_smooth_q1, y_smooth_q3, color=col, alpha=0.15, linewidth=0)
+            # Shade ONLY the Std Dev band
+            ax.fill_between(x_smooth, y_smooth_lower, y_smooth_upper, color=col, alpha=0.15, linewidth=0)
 
         # Plot raw dots and whiskers behind it for reference
         ax.errorbar(x_vals, medians, yerr=[err_low, err_high], fmt='o', color=col, alpha=0.5, markersize=4, capsize=2, label="Response")
@@ -387,11 +388,11 @@ def _plot_multi_line_spline_trend(exp_name, audio_groups, folder):
     ax.set_aspect('equal', adjustable='box')
     ax.set_xlim(-limit, limit)
     ax.set_ylim(-limit, limit)
-    ax.set_xlabel(r'Target Angle ($^{\circ}$)')
-    ax.set_ylabel(r'Perceived Angle ($^{\circ}$)')
+    ax.set_xlabel(r'Target Angle (DEG)')
+    ax.set_ylabel(r'Perceived Angle (DEG)')
     
     handles, labels = ax.get_legend_handles_labels()
-    patch = mpatches.Patch(color='gray', alpha=0.2, label='Shade: Smoothed IQR Band | Dot: Median | Whiskers: 25th-75th Pct')
+    patch = mpatches.Patch(color='gray', alpha=0.2, label='Shade: Smoothed +/-1 Std Dev | Dot: Median | Whiskers: +/-1 Std Dev')
     handles.append(patch)
     ax.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, -0.12), 
               ncol=2, frameon=True, fontsize=9)
@@ -419,34 +420,34 @@ def _plot_method_comparison_spline(experiments, folder, dim, k1, k2):
             for t, r in data_dict.items(): merged[t].extend(r)
         
         targets = sorted(merged.keys())
-        x_vals, medians, q1_vals, q3_vals = [], [], [], []
+        x_vals, medians, lower_vals, upper_vals = [], [], [], []
         err_low, err_high = [], []
         
         for t in targets:
             responses = [_cm_to_deg(r, radius) for r in merged[t]]
             x_val = _cm_to_deg(t, radius)
-            q1 = np.percentile(responses, 25)
-            q3 = np.percentile(responses, 75)
+            
             med = np.median(responses)
+            std = np.std(responses, ddof=1) if len(responses) > 1 else 0.0
             
             x_vals.append(x_val)
             medians.append(med)
-            q1_vals.append(q1)
-            q3_vals.append(q3)
-            err_low.append(med - q1)
-            err_high.append(q3 - med)
+            lower_vals.append(med - std)
+            upper_vals.append(med + std)
+            err_low.append(std)
+            err_high.append(std)
             
         if len(x_vals) > 3:
             s_factor = len(x_vals) * 1000
             
-            spline_q1 = UnivariateSpline(x_vals, q1_vals, k=3, s=s_factor)
-            spline_q3 = UnivariateSpline(x_vals, q3_vals, k=3, s=s_factor)
+            spline_lower = UnivariateSpline(x_vals, lower_vals, k=3, s=s_factor)
+            spline_upper = UnivariateSpline(x_vals, upper_vals, k=3, s=s_factor)
             
             x_smooth = np.linspace(min(x_vals), max(x_vals), 100)
-            y_smooth_q1 = spline_q1(x_smooth)
-            y_smooth_q3 = spline_q3(x_smooth)
+            y_smooth_lower = spline_lower(x_smooth)
+            y_smooth_upper = spline_upper(x_smooth)
             
-            ax.fill_between(x_smooth, y_smooth_q1, y_smooth_q3, color=color, alpha=0.15, linewidth=0)
+            ax.fill_between(x_smooth, y_smooth_lower, y_smooth_upper, color=color, alpha=0.15, linewidth=0)
         
         ax.errorbar(x_vals, medians, yerr=[err_low, err_high], fmt=m, color=color, alpha=0.5, markersize=5, capsize=3, label=tag)
 
@@ -459,11 +460,11 @@ def _plot_method_comparison_spline(experiments, folder, dim, k1, k2):
     ax.set_aspect('equal', adjustable='box')
     ax.set_xlim(-limit, limit)
     ax.set_ylim(-limit, limit)
-    ax.set_xlabel(r'Target Angle ($^{\circ}$)')
-    ax.set_ylabel(r'Perceived Angle ($^{\circ}$)')
+    ax.set_xlabel(r'Target Angle (DEG)')
+    ax.set_ylabel(r'Perceived Angle (DEG)')
     
     handles, labels = ax.get_legend_handles_labels()
-    patch = mpatches.Patch(color='gray', alpha=0.2, label='Shade: Smoothed IQR Band | Dot: Median | Whiskers: 25th-75th Pct')
+    patch = mpatches.Patch(color='gray', alpha=0.2, label='Shade: Smoothed +/-1 Std Dev | Dot: Median | Whiskers: +/-1 Std Dev')
     handles.append(patch)
     ax.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, -0.12), 
               ncol=2, frameon=True, fontsize=9)
@@ -509,8 +510,8 @@ def _plot_master_comparison(experiments, folder, use_deg=False):
     ax.set_aspect('equal', adjustable='box')
     ax.set_xlim(-limit, limit)
     ax.set_ylim(-limit, limit)
-    ax.set_xlabel(r'Target Angle ($^{\circ}$)')
-    ax.set_ylabel(r'Perceived Angle ($^{\circ}$)')
+    ax.set_xlabel(r'Target Angle (DEG)')
+    ax.set_ylabel(r'Perceived Angle (DEG)')
     ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), 
               ncol=3, frameon=True, fontsize=9)
     plt.savefig(os.path.join(folder, "GRAPH_MASTER_POSITIONS.png"), dpi=300, bbox_inches='tight')
@@ -534,7 +535,7 @@ def _plot_master_absolute_error(raw_data, folder, use_deg=False):
     plt.xticks(np.arange(len(labels)), labels, rotation=25, ha='right')
     
     plt.title("Overall Mean Absolute Error")
-    plt.ylabel(r'Mean Absolute Error ($^{\circ}$)')
+    plt.ylabel(r'Mean Absolute Error (DEG)')
     plt.grid(axis='y', linestyle=':', alpha=0.5)
     plt.legend([bars], ["Bar: Mean Error | Whiskers: Std Error of Mean (SEM)"], 
                loc='upper center', bbox_to_anchor=(0.5, -0.15), 
@@ -573,8 +574,8 @@ def _plot_master_grouped_position_error_lines(raw_data_flat, folder, use_deg=Fal
                 y_vals.append(data_map[p][exp_name])
         plt.plot(x_vals, y_vals, marker='o', linestyle='-', label=_shorten_name(exp_name), color=colors[i], markersize=6, alpha=0.8)
         
-    plt.xlabel(r'Target Angle ($^{\circ}$)')
-    plt.ylabel(r'Median Abs Error ($^{\circ}$)')
+    plt.xlabel(r'Target Angle (DEG)')
+    plt.ylabel(r'Median Abs Error (DEG)')
     
     plt.title("Detailed Error Analysis by Position")
     ax = plt.gca()
@@ -590,36 +591,63 @@ def _plot_master_signed_error(raw_data, folder, use_deg=False):
     if not raw_data or not use_deg: return
     plt.figure(figsize=(10, 6))
     exp_names = sorted(raw_data.keys())
-    data, labels = [], []
+    
+    stats_list = []  # We will store our custom dictionaries here
+    labels = []
+    
     for exp in exp_names:
         radius = _get_radius_for_exp(exp)
         errors = [_cm_to_deg(d['signed_error'], radius) for d in raw_data[exp]]
         if not errors: continue
-        data.append(errors)
+        
+        # 1. Manually calculate the statistics
+        med = np.median(errors)
+        q1 = np.percentile(errors, 25)
+        q3 = np.percentile(errors, 75)
+        std = np.std(errors, ddof=1) if len(errors) > 1 else 0.0
+        
+        low_whisker = med - std
+        high_whisker = med + std
+        
+        # 2. Identify outliers beyond the std dev whiskers
+        fliers = [e for e in errors if e < low_whisker or e > high_whisker]
+        
+        # 3. Append to the stats list in the format ax.bxp() expects
+        stats_list.append({
+            'label': _shorten_name(exp),
+            'med': med,
+            'q1': q1,
+            'q3': q3,
+            'whislo': low_whisker,
+            'whishi': high_whisker,
+            'fliers': fliers
+        })
         labels.append(_shorten_name(exp))
     
-    # Alternating Blue/Orange colors
     colors = ['#1f77b4', '#ff7f0e'] * (len(exp_names) // 2 + 1)
     
     ax = plt.gca()
     ax.axhline(0, color='black', linewidth=1)
     
-    bp = ax.boxplot(data, labels=labels, patch_artist=True, boxprops=dict(facecolor="white", color="black"))
+    # 4. Use ax.bxp instead of ax.boxplot
+    bp = ax.bxp(stats_list, patch_artist=True, boxprops=dict(facecolor="white", color="black"), showfliers=True)
+    
     for patch, color in zip(bp['boxes'], colors):
         patch.set_facecolor(color)
         patch.set_alpha(0.6)
         
     ax.set_xticklabels(labels, rotation=45, ha='right') 
-    ax.set_ylabel(r'Signed Error ($^{\circ}$)')
+    ax.set_ylabel(r'Signed Error (DEG)')
     ax.set_title("Bias Distribution (Signed Error)")
     
-    # Finer 10-degree grid horizontally
     ax.yaxis.set_major_locator(MultipleLocator(10))
     ax.grid(axis='y', linestyle=':', alpha=0.6)
     
     h_b = mpatches.Patch(color='#1f77b4', label='Single Speaker', alpha=0.6)
     h_o = mpatches.Patch(color='#ff7f0e', label='Dual Mono', alpha=0.6)
-    h_box = mpatches.Patch(color='white', ec='black', label='Box: 25th-75th Pct (IQR) | Line: Median | Whiskers: 1.5x IQR')
+    
+    # 5. Update the legend text
+    h_box = mpatches.Patch(color='white', ec='black', label='Box: 25th-75th Pct (IQR) | Line: Median | Whiskers: +/-1 Std Dev')
     
     ax.legend(handles=[h_b, h_o, h_box], loc='upper center', bbox_to_anchor=(0.5, -0.25), 
                ncol=1, frameon=True, fontsize=9)
@@ -649,8 +677,8 @@ def _plot_detailed_error_vs_position(exp_name, data_list, folder, use_deg=False)
     _set_10deg_grid(ax)
     
     ax.set_title(f"{_shorten_name(exp_name)} - Response Boxplots")
-    ax.set_xlabel(r'Target Angle ($^{\circ}$)')
-    ax.set_ylabel(r'Perceived Angle ($^{\circ}$)')
+    ax.set_xlabel(r'Target Angle (DEG)')
+    ax.set_ylabel(r'Perceived Angle (DEG)')
     
     ax.set_aspect('equal', adjustable='box')
     ax.set_xlim(-AXIS_LIMIT, AXIS_LIMIT)
