@@ -36,10 +36,9 @@ RADII = {
 }
 
 # --- GLOBAL AXIS LIMITS (For Comparability) ---
-AXIS_LIMIT = 75.0 
+AXIS_LIMIT = 70.0 
 
 def generate_aggregated_plots(data_folder_name="experiment_data"):
-    
     current_file_path = os.path.abspath(__file__)
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(current_file_path)))
     data_folder = os.path.join(project_root, data_folder_name)
@@ -106,18 +105,18 @@ def generate_aggregated_plots(data_folder_name="experiment_data"):
     # --- GENERATE GRAPHS ---
     print("Generating Thesis Angular (Degree) Graphs...")
     
-    # 1. Standard Error Bar Graphs (IQR)
+    # 1. Standard Error Bar Graphs
     for exp_label, audio_groups in experiments.items():
         _plot_multi_line_experiment(exp_label, audio_groups, data_folder, use_deg=True)
 
     _plot_master_comparison(experiments, data_folder, use_deg=True)
     
-    # === COMPARISON GRAPHS (IQR) ===
+    # === COMPARISON GRAPHS ===
     _plot_method_comparison(experiments, data_folder, "Azimuth", "0. Azimuth", "1. Azimuth", use_deg=True) 
     _plot_method_comparison(experiments, data_folder, "Distance", "2. Distance Single", "3. Distance Dual", use_deg=True)
     _plot_method_comparison(experiments, data_folder, "Elevation", "4. Elevation Single", "5. Elevation Dual", use_deg=True)
     
-    # 2. Spline Trend Graphs (Shaded STD DEV ONLY)
+    # 2. Spline Trend Graphs
     print("Generating Reactive Spline Graphs...")
     for exp_label, audio_groups in experiments.items():
         _plot_multi_line_spline_trend(exp_label, audio_groups, data_folder)
@@ -159,17 +158,46 @@ def _shorten_name(exp_name):
     name = str(exp_name).strip()
     if name.lower().endswith('.wav'): name = name[:-4]
     
-    if "0. Azimuth" in name or name == "Previous": return "Azimuth Single"
-    if "1. Azimuth" in name: return "Azimuth Dual"
-    if "2. Distance Single" in name: return "Distance Single"
-    if "3. Distance Dual" in name: return "Distance Dual"
-    if "4. Elevation Single" in name: return "Elevation Single"
-    if "5. Elevation Dual" in name: return "Elevation Dual"
-    
+    mapping = {
+        "0. Azimuth": "Azimuth Single",
+        "Previous": "Azimuth Single",
+        "1. Azimuth": "Azimuth Dual",
+        "2. Distance Single": "Distance Single",
+        "3. Distance Dual": "Distance Dual",
+        "4. Elevation Single": "Elevation Single",
+        "5. Elevation Dual": "Elevation Dual"
+    }
+    for key, val in mapping.items():
+        if key in name: return val
+        
     if '.' in name:
         parts = name.split('.')
         if len(parts) > 1: return parts[1].split('(')[0].strip()
     return name
+
+def _calculate_angular_stats(data_dict, radius):
+    """Auxiliary method calculating median, quartiles (IQR), and using IQR for whiskers."""
+    targets = sorted(data_dict.keys())
+    x_vals, medians, lower_vals, upper_vals, err_low, err_high = [], [], [], [], [], []
+    
+    for t in targets:
+        responses = [_cm_to_deg(r, radius) for r in data_dict[t]]
+        x_val = _cm_to_deg(t, radius)
+        
+        med = np.median(responses)
+        q1 = np.percentile(responses, 25)
+        q3 = np.percentile(responses, 75)
+        
+        x_vals.append(x_val)
+        medians.append(med)
+        lower_vals.append(q1)
+        upper_vals.append(q3)
+        
+        # Whiskers directly represent the IQR (distance from median to Q1 and Q3)
+        err_low.append(med - q1)
+        err_high.append(q3 - med)
+        
+    return x_vals, medians, lower_vals, upper_vals, err_low, err_high
 
 def _add_ideal_line(ax, limit):
     ax.plot([-limit, limit], [-limit, limit], color='gray', linestyle='--', linewidth=1, label='Target', zorder=0)
@@ -222,7 +250,7 @@ def _set_10deg_grid(ax):
     ax.grid(True, linestyle=':', alpha=0.6)
 
 # ==============================================================================
-# 1. ERROR BAR PLOTS (IQR)
+# 1. ERROR BAR PLOTS
 # ==============================================================================
 
 def _plot_multi_line_experiment(exp_name, audio_groups, folder, use_deg=False):
@@ -232,20 +260,7 @@ def _plot_multi_line_experiment(exp_name, audio_groups, folder, use_deg=False):
     colors = plt.cm.tab10(np.linspace(0, 1, max(len(audio_groups), 3)))
 
     for i, (audio, data) in enumerate(audio_groups.items()):
-        targets = sorted(data.keys())
-        medians, err_low, err_high, x_vals = [], [], [], []
-        
-        for t in targets:
-            responses = [_cm_to_deg(r, radius) for r in data[t]]
-            x_val = _cm_to_deg(t, radius)
-            q1 = np.percentile(responses, 25)
-            q3 = np.percentile(responses, 75)
-            med = np.median(responses)
-            
-            x_vals.append(x_val) 
-            medians.append(med)
-            err_low.append(med - q1)
-            err_high.append(q3 - med)
+        x_vals, medians, _, _, err_low, err_high = _calculate_angular_stats(data, radius)
         
         ax.errorbar(x_vals, medians, yerr=[err_low, err_high], fmt='o-', 
                     label="Response", 
@@ -260,18 +275,18 @@ def _plot_multi_line_experiment(exp_name, audio_groups, folder, use_deg=False):
     ax.set_aspect('equal', adjustable='box')
     ax.set_xlim(-limit, limit)
     ax.set_ylim(-limit, limit)
-    ax.set_xlabel(r'Target Angle (DEG)')
-    ax.set_ylabel(r'Perceived Angle (DEG)')
+    ax.set_xlabel('Target Angle (DEG)')
+    ax.set_ylabel('Perceived Angle (DEG)')
     
     handles, labels = ax.get_legend_handles_labels()
-    patch = mpatches.Patch(color='none', label='Dot: Median | Whiskers: 25th-75th Pct (IQR)')
+    patch = mpatches.Patch(color='none', label='Dot: Median | Whiskers: IQR (Q1 to Q3)')
     handles.append(patch)
     
     ax.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, -0.12), 
               ncol=3, frameon=True, fontsize=9)
     
     safe = "".join([c for c in exp_name if c.isalnum() or c in (' ', '_')]).strip().replace(" ", "_")
-    plt.savefig(os.path.join(folder, f"GRAPH_{safe}_IQR.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(folder, f"GRAPH_{safe}_ErrorBars.png"), dpi=300, bbox_inches='tight')
     plt.close()
 
 def _plot_method_comparison(experiments, folder, dim, k1, k2, use_deg=False):
@@ -293,20 +308,7 @@ def _plot_method_comparison(experiments, folder, dim, k1, k2, use_deg=False):
         for _, data_dict in experiments[label].items():
             for t, r in data_dict.items(): merged[t].extend(r)
         
-        targets = sorted(merged.keys())
-        x_vals, medians, err_low, err_high = [], [], [], []
-        
-        for t in targets:
-            responses = [_cm_to_deg(r, radius) for r in merged[t]]
-            x_val = _cm_to_deg(t, radius)
-            q1 = np.percentile(responses, 25)
-            q3 = np.percentile(responses, 75)
-            med = np.median(responses)
-            
-            x_vals.append(x_val) 
-            medians.append(med)
-            err_low.append(med - q1)
-            err_high.append(q3 - med)
+        x_vals, medians, _, _, err_low, err_high = _calculate_angular_stats(merged, radius)
             
         ax.errorbar(x_vals, medians, yerr=[err_low, err_high], fmt=m, capsize=4, label=tag, color=color, alpha=0.7)
 
@@ -319,21 +321,20 @@ def _plot_method_comparison(experiments, folder, dim, k1, k2, use_deg=False):
     ax.set_aspect('equal', adjustable='box')
     ax.set_xlim(-limit, limit)
     ax.set_ylim(-limit, limit)
-    ax.set_xlabel(r'Target Angle (DEG)')
-    ax.set_ylabel(r'Perceived Angle (DEG)')
+    ax.set_xlabel('Target Angle (DEG)')
+    ax.set_ylabel('Perceived Angle (DEG)')
     
     handles, labels = ax.get_legend_handles_labels()
-    patch = mpatches.Patch(color='none', label='Dot: Median | Whiskers: 25th-75th Pct (IQR)')
+    patch = mpatches.Patch(color='none', label='Dot: Median | Whiskers: IQR (Q1 to Q3)')
     handles.append(patch)
     ax.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, -0.12), 
               ncol=3, frameon=True, fontsize=9)
     
-    plt.savefig(os.path.join(folder, f"GRAPH_COMPARE_{dim.upper()}_IQR.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(folder, f"GRAPH_COMPARE_{dim.upper()}_ErrorBars.png"), dpi=300, bbox_inches='tight')
     plt.close()
 
-
 # ==============================================================================
-# 2. SPLINE TREND GRAPHS (BASED ON STANDARD DEVIATION)
+# 2. SPLINE TREND GRAPHS
 # ==============================================================================
 
 def _plot_multi_line_spline_trend(exp_name, audio_groups, folder):
@@ -342,25 +343,7 @@ def _plot_multi_line_spline_trend(exp_name, audio_groups, folder):
     colors = plt.cm.tab10(np.linspace(0, 1, max(len(audio_groups), 3)))
 
     for i, (audio, data) in enumerate(audio_groups.items()):
-        targets = sorted(data.keys())
-        x_vals, medians, lower_vals, upper_vals = [], [], [], []
-        err_low, err_high = [], []
-        
-        for t in targets:
-            responses = [_cm_to_deg(r, radius) for r in data[t]]
-            x_val = _cm_to_deg(t, radius)
-            
-            med = np.median(responses)
-            # Calculate Standard Deviation (ddof=1 for sample data)
-            std = np.std(responses, ddof=1) if len(responses) > 1 else 0.0
-            
-            x_vals.append(x_val)
-            medians.append(med)
-            lower_vals.append(med - std)
-            upper_vals.append(med + std)
-            err_low.append(std)
-            err_high.append(std)
-
+        x_vals, medians, lower_vals, upper_vals, err_low, err_high = _calculate_angular_stats(data, radius)
         col = colors[i]
         
         if len(x_vals) > 3:
@@ -373,10 +356,9 @@ def _plot_multi_line_spline_trend(exp_name, audio_groups, folder):
             y_smooth_lower = spline_lower(x_smooth)
             y_smooth_upper = spline_upper(x_smooth)
             
-            # Shade ONLY the Std Dev band
+            # Shade ONLY the IQR band
             ax.fill_between(x_smooth, y_smooth_lower, y_smooth_upper, color=col, alpha=0.15, linewidth=0)
 
-        # Plot raw dots and whiskers behind it for reference
         ax.errorbar(x_vals, medians, yerr=[err_low, err_high], fmt='o', color=col, alpha=0.5, markersize=4, capsize=2, label="Response")
 
     limit = AXIS_LIMIT
@@ -388,11 +370,11 @@ def _plot_multi_line_spline_trend(exp_name, audio_groups, folder):
     ax.set_aspect('equal', adjustable='box')
     ax.set_xlim(-limit, limit)
     ax.set_ylim(-limit, limit)
-    ax.set_xlabel(r'Target Angle (DEG)')
-    ax.set_ylabel(r'Perceived Angle (DEG)')
+    ax.set_xlabel('Target Angle (DEG)')
+    ax.set_ylabel('Perceived Angle (DEG)')
     
     handles, labels = ax.get_legend_handles_labels()
-    patch = mpatches.Patch(color='gray', alpha=0.2, label='Shade: Smoothed +/-1 Std Dev | Dot: Median | Whiskers: +/-1 Std Dev')
+    patch = mpatches.Patch(color='gray', alpha=0.2, label='Shade & Whiskers: IQR (Q1 to Q3) | Dot: Median')
     handles.append(patch)
     ax.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, -0.12), 
               ncol=2, frameon=True, fontsize=9)
@@ -419,23 +401,7 @@ def _plot_method_comparison_spline(experiments, folder, dim, k1, k2):
         for _, data_dict in experiments[label].items():
             for t, r in data_dict.items(): merged[t].extend(r)
         
-        targets = sorted(merged.keys())
-        x_vals, medians, lower_vals, upper_vals = [], [], [], []
-        err_low, err_high = [], []
-        
-        for t in targets:
-            responses = [_cm_to_deg(r, radius) for r in merged[t]]
-            x_val = _cm_to_deg(t, radius)
-            
-            med = np.median(responses)
-            std = np.std(responses, ddof=1) if len(responses) > 1 else 0.0
-            
-            x_vals.append(x_val)
-            medians.append(med)
-            lower_vals.append(med - std)
-            upper_vals.append(med + std)
-            err_low.append(std)
-            err_high.append(std)
+        x_vals, medians, lower_vals, upper_vals, err_low, err_high = _calculate_angular_stats(merged, radius)
             
         if len(x_vals) > 3:
             s_factor = len(x_vals) * 1000
@@ -460,18 +426,17 @@ def _plot_method_comparison_spline(experiments, folder, dim, k1, k2):
     ax.set_aspect('equal', adjustable='box')
     ax.set_xlim(-limit, limit)
     ax.set_ylim(-limit, limit)
-    ax.set_xlabel(r'Target Angle (DEG)')
-    ax.set_ylabel(r'Perceived Angle (DEG)')
+    ax.set_xlabel('Target Angle (DEG)')
+    ax.set_ylabel('Perceived Angle (DEG)')
     
     handles, labels = ax.get_legend_handles_labels()
-    patch = mpatches.Patch(color='gray', alpha=0.2, label='Shade: Smoothed +/-1 Std Dev | Dot: Median | Whiskers: +/-1 Std Dev')
+    patch = mpatches.Patch(color='gray', alpha=0.2, label='Shade & Whiskers: IQR (Q1 to Q3) | Dot: Median')
     handles.append(patch)
     ax.legend(handles=handles, loc='upper center', bbox_to_anchor=(0.5, -0.12), 
               ncol=2, frameon=True, fontsize=9)
     
     plt.savefig(os.path.join(folder, f"GRAPH_COMPARE_{dim.upper()}_Spline.png"), dpi=300, bbox_inches='tight')
     plt.close()
-
 
 # ==============================================================================
 # 3. MASTER COMPARISON & DOT CHARTS
@@ -510,8 +475,8 @@ def _plot_master_comparison(experiments, folder, use_deg=False):
     ax.set_aspect('equal', adjustable='box')
     ax.set_xlim(-limit, limit)
     ax.set_ylim(-limit, limit)
-    ax.set_xlabel(r'Target Angle (DEG)')
-    ax.set_ylabel(r'Perceived Angle (DEG)')
+    ax.set_xlabel('Target Angle (DEG)')
+    ax.set_ylabel('Perceived Angle (DEG)')
     ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), 
               ncol=3, frameon=True, fontsize=9)
     plt.savefig(os.path.join(folder, "GRAPH_MASTER_POSITIONS.png"), dpi=300, bbox_inches='tight')
@@ -535,7 +500,7 @@ def _plot_master_absolute_error(raw_data, folder, use_deg=False):
     plt.xticks(np.arange(len(labels)), labels, rotation=25, ha='right')
     
     plt.title("Overall Mean Absolute Error")
-    plt.ylabel(r'Mean Absolute Error (DEG)')
+    plt.ylabel('Mean Absolute Error (DEG)')
     plt.grid(axis='y', linestyle=':', alpha=0.5)
     plt.legend([bars], ["Bar: Mean Error | Whiskers: Std Error of Mean (SEM)"], 
                loc='upper center', bbox_to_anchor=(0.5, -0.15), 
@@ -574,8 +539,8 @@ def _plot_master_grouped_position_error_lines(raw_data_flat, folder, use_deg=Fal
                 y_vals.append(data_map[p][exp_name])
         plt.plot(x_vals, y_vals, marker='o', linestyle='-', label=_shorten_name(exp_name), color=colors[i], markersize=6, alpha=0.8)
         
-    plt.xlabel(r'Target Angle (DEG)')
-    plt.ylabel(r'Median Abs Error (DEG)')
+    plt.xlabel('Target Angle (DEG)')
+    plt.ylabel('Median Abs Error (DEG)')
     
     plt.title("Detailed Error Analysis by Position")
     ax = plt.gca()
@@ -591,37 +556,12 @@ def _plot_master_signed_error(raw_data, folder, use_deg=False):
     if not raw_data or not use_deg: return
     plt.figure(figsize=(10, 6))
     exp_names = sorted(raw_data.keys())
-    
-    stats_list = []  # We will store our custom dictionaries here
-    labels = []
-    
+    data, labels = [], []
     for exp in exp_names:
         radius = _get_radius_for_exp(exp)
         errors = [_cm_to_deg(d['signed_error'], radius) for d in raw_data[exp]]
         if not errors: continue
-        
-        # 1. Manually calculate the statistics
-        med = np.median(errors)
-        q1 = np.percentile(errors, 25)
-        q3 = np.percentile(errors, 75)
-        std = np.std(errors, ddof=1) if len(errors) > 1 else 0.0
-        
-        low_whisker = med - std
-        high_whisker = med + std
-        
-        # 2. Identify outliers beyond the std dev whiskers
-        fliers = [e for e in errors if e < low_whisker or e > high_whisker]
-        
-        # 3. Append to the stats list in the format ax.bxp() expects
-        stats_list.append({
-            'label': _shorten_name(exp),
-            'med': med,
-            'q1': q1,
-            'q3': q3,
-            'whislo': low_whisker,
-            'whishi': high_whisker,
-            'fliers': fliers
-        })
+        data.append(errors)
         labels.append(_shorten_name(exp))
     
     colors = ['#1f77b4', '#ff7f0e'] * (len(exp_names) // 2 + 1)
@@ -629,15 +569,14 @@ def _plot_master_signed_error(raw_data, folder, use_deg=False):
     ax = plt.gca()
     ax.axhline(0, color='black', linewidth=1)
     
-    # 4. Use ax.bxp instead of ax.boxplot
-    bp = ax.bxp(stats_list, patch_artist=True, boxprops=dict(facecolor="white", color="black"), showfliers=True)
+    bp = ax.boxplot(data, labels=labels, patch_artist=True, boxprops=dict(facecolor="white", color="black"))
     
     for patch, color in zip(bp['boxes'], colors):
         patch.set_facecolor(color)
         patch.set_alpha(0.6)
         
     ax.set_xticklabels(labels, rotation=45, ha='right') 
-    ax.set_ylabel(r'Signed Error (DEG)')
+    ax.set_ylabel('Signed Error (DEG)')
     ax.set_title("Bias Distribution (Signed Error)")
     
     ax.yaxis.set_major_locator(MultipleLocator(10))
@@ -645,9 +584,7 @@ def _plot_master_signed_error(raw_data, folder, use_deg=False):
     
     h_b = mpatches.Patch(color='#1f77b4', label='Single Speaker', alpha=0.6)
     h_o = mpatches.Patch(color='#ff7f0e', label='Dual Mono', alpha=0.6)
-    
-    # 5. Update the legend text
-    h_box = mpatches.Patch(color='white', ec='black', label='Box: 25th-75th Pct (IQR) | Line: Median | Whiskers: +/-1 Std Dev')
+    h_box = mpatches.Patch(color='white', ec='black', label='Box: 25th-75th Pct (IQR) | Line: Median | Whiskers: 1.5x IQR')
     
     ax.legend(handles=[h_b, h_o, h_box], loc='upper center', bbox_to_anchor=(0.5, -0.25), 
                ncol=1, frameon=True, fontsize=9)
@@ -677,8 +614,8 @@ def _plot_detailed_error_vs_position(exp_name, data_list, folder, use_deg=False)
     _set_10deg_grid(ax)
     
     ax.set_title(f"{_shorten_name(exp_name)} - Response Boxplots")
-    ax.set_xlabel(r'Target Angle (DEG)')
-    ax.set_ylabel(r'Perceived Angle (DEG)')
+    ax.set_xlabel('Target Angle (DEG)')
+    ax.set_ylabel('Perceived Angle (DEG)')
     
     ax.set_aspect('equal', adjustable='box')
     ax.set_xlim(-AXIS_LIMIT, AXIS_LIMIT)
